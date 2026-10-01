@@ -50,6 +50,12 @@ cargo xmake test
 # 看看他到底会做什么
 cargo xmake doctor
 
+# 新项目：建完直接就是 xmake 档（自动 setup，不用再手动跑一遍）
+cargo xmake new hello
+cd hello && cargo run      # 已经吃上 xmake 档的 dev 剖面了
+# 不想自动 setup：
+cargo xmake new hello --xmk-no-setup
+
 # 找出"被复制了 N 份"的泛型热点
 cargo xmake audit
 
@@ -326,6 +332,7 @@ opt-level = "z"     ← 于是"没配 profile"的项目 release 是 -C opt-level
 | 命令 | 作用 |
 |---|---|
 | `cargo xmake <任意 cargo 子命令>` | 原样转发，共用缓存 |
+| `cargo xmake new <名字>` / `init` | 建完项目**自动 setup**（新建项目立刻是 xmake 档），`--xmk-no-setup` 可关 |
 | `cargo xmake setup` | 把剖面设置合进 `.cargo/config.toml`（不覆盖你已有的值） |
 | `cargo xmake undo` | 精确撤销 —— 配置按 `# cargo-xmake` 标记删，源码按 `// cargo-xmake:dyn` 标记折叠回泛型 |
 | `cargo xmake doctor` | 打印会生效的每一刀 + 所有配置来源 |
@@ -337,7 +344,7 @@ opt-level = "z"     ← 于是"没配 profile"的项目 release 是 -C opt-level
 开关都带 `--xmk-` 前缀，放在命令行**任意位置**都行，cargo 永远看不到它们：
 
 `--xmk-tier=safe|fast|extreme` · `--xmk-force` · `--xmk-trace` ·
-`--xmk-cranelift` · `--xmk-no-link-flags` · `--xmk-package=` · `--xmk-target-dir=` ·
+`--xmk-cranelift` · `--xmk-no-link-flags` · `--xmk-no-setup` · `--xmk-package=` · `--xmk-target-dir=` ·
 `--xmk-top=N` · `--xmk-mode=auto|stats|mono|ir` · `--xmk-switch=debug-assertions|feature`
 
 ### `undo` 怎么还原源码：靠标记，不靠备份

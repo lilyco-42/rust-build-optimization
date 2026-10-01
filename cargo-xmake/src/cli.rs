@@ -51,6 +51,9 @@ pub struct Opts {
     pub cranelift: bool,
     pub lld: bool,
     pub no_link_flags: bool,
+    /// `cargo new` / `cargo init` 之后**不**自动 setup。
+    /// 默认是自动的（新建项目就该直接用上），这个开关给「我只要一个干净的 cargo 项目」留门。
+    pub no_setup: bool,
     pub package: Option<String>,
     pub target_dir: Option<PathBuf>,
     pub rewrite: bool,
@@ -99,6 +102,7 @@ impl Default for Opts {
             cranelift: false,
             lld: false,
             no_link_flags: false,
+            no_setup: false,
             package: None,
             target_dir: None,
             rewrite: false,
@@ -160,6 +164,7 @@ fn strip_xmk(argv: &[String], opts: &mut Opts, errs: &mut Vec<String>) -> Vec<St
             "cranelift" => opts.cranelift = true,
             "lld" => opts.lld = true,
             "no-link-flags" | "no-debug-none" => opts.no_link_flags = true,
+            "no-setup" | "no-auto-setup" => opts.no_setup = true,
             "rewrite" => {
                 opts.rewrite = true;
                 opts.dry_run = false;

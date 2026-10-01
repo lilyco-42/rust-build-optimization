@@ -65,7 +65,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "dynify" => cmd_dynify(&root, &parsed, &style).unwrap_or_else(|| 0),
         "slim" => slim::cmd_slim(&root, &parsed.opts, &style).unwrap_or_else(|| 0),
         "selftest" => cmd_selftest(&root, &style).unwrap_or_else(|| 0),
-        _ => cmd_passthrough(&root, &parsed, &style),
+        _ => cmd_passthrough(&cwd, &root, &parsed, &style),
     }
 }
 
@@ -76,9 +76,18 @@ fn fail(style: &Style, msg: &str) -> Option<i32> {
 
 // ---------------------------------------------------------------- 转发
 
-fn cmd_passthrough(root: &Path, p: &Parsed, style: &Style) -> i32 {
+fn cmd_passthrough(cwd: &Path, root: &Path, p: &Parsed, style: &Style) -> i32 {
+    // `new` / `init` 必须在**你站着的那个目录**里建项目，不能用 workspace 根：
+    // 在 workspace 子目录里跑 `cargo xmake new foo`，用 root 会把项目建到 workspace 根去，
+    // 而 cargo 自己建在 cwd。其余命令反过来 —— 它们要在 workspace 根跑，缓存才共用。
+    let dir: &Path = if p.cmd == "new" || p.cmd == "init" {
+        cwd
+    } else {
+        root
+    };
+
     // 先给一次温和的提示，但不阻塞、不改任何东西
-    if run::is_buildish(&p.cmd) && !config::is_setup(root) {
+    if run::is_buildish(&p.cmd) && !config::is_setup(dir) {
         eprintln!(
             "{} 还没 setup，这次就是普通 cargo（缓存不受影响）。跑一次 {} 就能拿到 xmake 档的设置。",
             style.yellow("提示："),
@@ -86,11 +95,69 @@ fn cmd_passthrough(root: &Path, p: &Parsed, style: &Style) -> i32 {
         );
     }
     let plan = run::build_plan(&p.cmd, &p.args, &p.opts);
-    let r = run::execute(root, &plan, &p.opts, style);
+    let r = run::execute(dir, &plan, &p.opts, style);
     if r.not_found {
         return 127;
     }
+    if r.code == 0 {
+        auto_setup_after_new(dir, p, style);
+    }
     r.code
+}
+
+/// `cargo new` / `cargo init` 建完项目后自动 setup —— 「新建项目」直接就是能用的状态，
+/// 不用再记着补一句 `cargo xmake setup`。
+///
+/// 三条边界，缺一条就不该自动写：
+///   1. 只在 cargo 真的成功（退出码 0）之后；
+///   2. 只在那个目录里确实有 `Cargo.toml`（推错目录要说出来，不能静默跳过）；
+///   3. 写了什么、怎么撤销当场讲清楚；`--xmk-no-setup` 可以整体关掉。
+fn auto_setup_after_new(base: &Path, p: &Parsed, style: &Style) {
+    if p.opts.no_setup {
+        return;
+    }
+    let dir = match run::created_project_dir(base, &p.cmd, &p.args) {
+        Some(d) => d,
+        None => return,
+    };
+    if !dir.join("Cargo.toml").exists() {
+        // 静默-0 反模式：这里不 return 一声不吭，用户会以为"已经 setup 过了"
+        eprintln!(
+            "{} {} 里没有 Cargo.toml，推测的项目目录不对，跳过自动 setup（项目本身已经建好了）。",
+            style.yellow("提示："),
+            util::pretty_path(&dir)
+        );
+        return;
+    }
+    let cfg = build_config_plan(&p.opts);
+    match config::apply(&dir, &cfg, false) {
+        Ok(rep) if rep.changed => {
+            println!();
+            println!(
+                "{} 新建的项目已经自动 setup：{}",
+                style.green("cargo-xmake："),
+                style.bold(&util::pretty_path(&rep.path))
+            );
+            println!(
+                "      tier={} —— dev 档少掉 PDB 和调试信息，release 仍是满血静态派发。",
+                p.opts.tier.as_str()
+            );
+            println!(
+                "      {}  {}     {}  {}",
+                style.dim("撤销"),
+                style.bold_cyan("cargo xmake undo"),
+                style.dim("这次不想要"),
+                style.bold_cyan("cargo xmake new <名字> --xmk-no-setup")
+            );
+        }
+        Ok(_) => {
+            // 已经是配置好的状态，不多话
+        }
+        Err(e) => eprintln!(
+            "{} 自动 setup 没写成：{e}（项目已经建好了，不受影响）",
+            style.yellow("提示：")
+        ),
+    }
 }
 
 // ---------------------------------------------------------------- setup / undo
@@ -1054,11 +1121,14 @@ fn print_help(style: &Style) {
   --xmk-trace                     打印实际执行的 cargo 命令与注入的环境变量
   --xmk-cranelift                 用 nightly 的 cranelift 后端（dev 专用）
   --xmk-no-link-flags             不注入 /DEBUG:NONE
+  --xmk-no-setup                  new/init 之后不自动 setup
   --xmk-package=NAME / --xmk-target-dir=PATH
 
 {}  cargo new / cargo run / cargo build / cargo test / clippy / … 全部照旧可用。
       cargo xmake build   等价于 cargo build，只是顺带享受 setup 过的剖面。
       另外还能直接写 cargo-xmake build（不开头的 xmake 会被自动跳过）。
+      cargo xmake new <名字> / cargo xmake init 建完项目会**自动 setup**，
+      新建的项目立刻就是 xmake 档；不想自动就加 --xmk-no-setup。
 
 {}  泛型不能靠编译标志解决 —— 实测 -Zshare-generics 改了 IR 一个字节都不变，
       -Zpolymorphize 已从 nightly 移除。所以 dynify 是显式的源码变换，
