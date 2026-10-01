@@ -248,15 +248,3 @@ int main(int argc, char **argv) {
 #endif
     return 0;
 }
-
-
-
-
-
-
-
-/* touch 1 */
-
-/* touch 2 */
-
-/* touch 3 */
