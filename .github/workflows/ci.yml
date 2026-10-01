@@ -1,0 +1,57 @@
+name: CI
+
+# 验证全部在 GitHub 机器上跑（不占用本机编译资源）：
+#   - 单元测试（cargo test，纯逻辑，stable 即可）
+#   - 端到端冒烟（scripts/smoke_cargo_xmake.sh，需 Windows + MSVC，因为脚本断言
+#     target/debug/*.exe 存在、且依赖 /DEBUG:NONE 关 PDB 的行为）
+#
+# 为什么跑 windows-latest：
+#   cargo-xmake 是「给 debug 构建做 C/xmake 级瘦身」的工具，核心断言依赖 MSVC 的
+#   /DEBUG:NONE；冒烟脚本也按 Windows 的 .exe / .pdb 写断言，只能在 Windows 跑。
+#
+# 关于 nightly：
+#   audit 的最佳数据源是 nightly 的 -Zdump-mono-stats（带代价模型），但它是易变 flag。
+#   stable 下 audit 会自动降级到 --emit=llvm-ir 兜底，冒烟脚本里「是否读到报告」的断言
+#   在两种通道下都成立。所以 stable 是必过的基线；nightly 作为非阻塞项，额外覆盖
+#   代价模型主路径（哪天 nightly 改了 flag，只会让 nightly 那一轮变红，不影响主干）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: ${{ matrix.toolchain }} · test + e2e smoke
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: stable
+            allow-failure: false
+          - toolchain: nightly
+            allow-failure: true
+    continue-on-error: ${{ matrix.allow-failure }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (${{ matrix.toolchain }})
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Build cargo-xmake (release)
+        run: cargo build --release --manifest-path cargo-xmake/Cargo.toml
+
+      - name: Put cargo-xmake on PATH
+        shell: bash
+        run: echo "$PWD/cargo-xmake/target/release" >> "$GITHUB_PATH"
+
+      - name: Unit tests
+        run: cargo test --manifest-path cargo-xmake/Cargo.toml
+
+      - name: End-to-end smoke test
+        shell: bash
+        run: bash scripts/smoke_cargo_xmake.sh
