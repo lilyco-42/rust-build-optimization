@@ -21,6 +21,7 @@
 | [E6](#e6) | 冲 1 GB · 第四波（达成 953 MB） | `_bench_1g4.json` |
 | [E7](#e7) | sccache 真实收益 | `_bench_sccache.json` `_sccache_result.json` |
 | [E8](#e8) | 依赖 opt-level 五组标定（终测） | `_bench_opt.json` |
+| [E9](#e9) | lilyco 首次真实测量 · `default-members` · `codegen-units` 单变量 | `_cgu.json` |
 
 ---
 
@@ -241,3 +242,66 @@ C 的慢不是编译后端慢，而是 **`#include` 展开量爆炸** —— 实
 | **合计** | **621 MB** |
 
 （另有 ~2,600 MB 来自基础 debug 配置）
+
+---
+
+<a id="e9"></a>
+## E9 · lilyco 首次真实测量 + `codegen-units` 单变量
+
+> 前面 E1–E8 全部在 **Tauri 最小探针**上做。E9 是第一次在**真实产品工作区**上量。
+> 数据：`experiments/lilyco-measure/` · 完整报告见 [`02-lilyco-measurements.md`](02-lilyco-measurements.md)
+> 与 [`03-build-speed.md`](03-build-speed.md)
+
+### E9.1 `default-members`（工作区第一刀）
+
+| | 包数 |
+|---|---|
+| 全部 24 成员 | 865 |
+| 默认成员 19 个 | **379** |
+| **省** | **486（56 %）** |
+
+`lilyco-graphite` 单独 **231 包**、`lilyco-tauri` **193 包**。
+CI 逐行确认只用 `-p <crate>`，**不受 `default-members` 影响**。
+
+### E9.2 lilyco 冷 / 增量基线
+
+| 命令 | 冷构建 | 增量（稳态） |
+|---|---|---|
+| `cargo check` | **48.2 s**（另测 53.6 s） | **2.8 s** |
+| `cargo build` | **90.1 s**（另测 91.1 / 134.3 s） | **4.9 s** |
+
+`target/` **935.3 MB**（`deps` 522.8 + `incremental` 325.1 + `build` 39.1），
+硬地板 **470 MB**（`rlib` 282.7 + `rmeta` 187.3），`.pdb` = **0**。
+
+### E9.3 `codegen-units` 单变量（否定结果）
+
+只改 `[profile.dev] codegen-units` 一行：
+
+| 变体 | `check` 冷 | `build` 冷 | `target/` |
+|---|---|---|---|
+| A `codegen-units = 16`（部署值） | 48.2 s | **90.1 s** | **935.3 MB** |
+| B `codegen-units = 256`（cargo dev 默认） | 46.0 s | 95.3 s | 948.3 MB |
+| **差（256 − 16）** | −2.2 s | **+5.2 s** | **+13.0 MB** |
+
+**结论：怀疑被证伪，16 更优，保留不动。**
+
+- `check` 的 −2.2 s 是**噪声**：`check` 不跑 codegen，`codegen-units` 对其无机制影响。
+  `check` 冷构建跨次测量 **46.0 / 48.2 / 53.6 s**，抖动 **±7 %**，2.2 s 在其中。
+- `build` 的 +5.2 s 与 `target/` 的 **+13 MB 是确定性的**：CGU 越多
+  → 泛型 monomorphize 在 CGU 间重复越多 → 更慢更大。
+  （与"`codegen-units = 1` 运行性能最好"是同一机制。）
+
+### E9.4 附加验证：dev 档 `panic = "abort"` 是否破坏测试
+
+`cargo test -p lilyco-core` → **66 passed / 0 failed**。
+cargo 对 test profile 强制 unwind，dev 档的 `panic = "abort"` **安全**。
+（`cargo test --no-run` 输出 `Finished \`test\` profile [optimized]`，
+无 `+debuginfo` → 确认 `opt-level = 1` + `debug = false` 已生效。）
+
+### E9.5 本次暴露的两个"假故障"与一个测量陷阱
+
+| 现象 | 真因 | 处置 |
+|---|---|---|
+| `cargo build --workspace` 崩 `os error 206 文件名或扩展名太长` | `web-sys` rustc 命令行 ~40,000 字符 > Windows `CreateProcess` 32,767；sccache 作为 wrapper 发进程 | 从 `.cargo/config.toml` 摘掉 `rustc-wrapper`，改 opt-in |
+| `cargo build --workspace` 报 `resource path 'binaries\lbin-...exe' doesn't exist` | `tauri.conf.json` 声明了 `externalBin`，sidecar 需先构建拷贝 | **不是配置问题**，该命令在真实项目里本就不曾可用 |
+| `cargo check` 增量测出 16.1 s 假值 | check 用 `rmeta`、build 用 `rlib`，两套产物不共享；在 build 冷构建（含 `cargo clean`）之后测 check 增量 | 两种 profile **各自预热**后重测 → 真值 2.8 s（**差 5.7×**） |

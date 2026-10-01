@@ -1,0 +1,16 @@
+[
+  {
+    "label": "A 我配的 codegen-units=16",
+    "codegen_units": 16,
+    "check_cold_s": 48.2,
+    "build_cold_s": 90.1,
+    "target_mb": 935.3
+  },
+  {
+    "label": "B cargo 默认 codegen-units=256",
+    "codegen_units": 256,
+    "check_cold_s": 46.0,
+    "build_cold_s": 95.3,
+    "target_mb": 948.3
+  }
+]

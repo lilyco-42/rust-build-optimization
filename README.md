@@ -14,6 +14,12 @@
 它讲的是「怎么想」：先分清你优化的是**编译量**还是**编译产物**，
 再顺着五层阶梯往下走。这套方法比任何具体配置都更可迁移。
 
+### 如果你的痛点是「**构建太慢**」
+
+直接看 [`docs/03-build-speed.md`](docs/03-build-speed.md)。核心：**速度和体积的杠杆几乎不重叠**，
+而本文档里的刀（`/DEBUG:NONE`、`debug = false`、去 `staticlib`）**对速度零收益**。
+速度专属的杠杆只有三个：`default-members`、用 `cargo check` 代替 `cargo build`、留 `incremental = true`。
+
 ### 如果你只想抄配置
 
 | 场景 | 看这里 |
@@ -51,6 +57,34 @@
 5. **`~/.cargo/config.toml` 里的 `[profile.*]` 完全无效**，
    多 crate 工作区的 `.cargo/config.toml` 只放子 crate 也会**静默失效**（从工作区根构建时读不到）。
 
+### 两个「否定结果」（省得你重复走）
+
+6. **`no_std` 不提速也不瘦身。** 同源代码只差一行 `#![no_std]` → 冷构建
+   7673 vs 7786 ms（−1.4 %，噪声级），**exe 字节数完全相同**。它是可移植性特性，不是性能特性。
+
+7. **自己把 `codegen-units` 从 cargo 默认 256 改成 16 不是错，反而更好。**
+   lilyco 实测 `build` 冷 90.1 s vs 95.3 s、`target/` 935.3 vs 948.3 MB。
+   （`check` 那 2.2 s 差是噪声 —— `check` 不跑 codegen。）**别去"修"它。**
+
+---
+
+### 在真实工作区上的第一刀：`default-members`
+
+```toml
+# 工作区根 Cargo.toml
+[workspace]
+members = [ ... 24 个 ... ]
+default-members = [ ... 19 个 ... ]   # ← 加这一行
+```
+
+| | 包数 |
+|---|---|
+| 全部 24 成员 | 865 |
+| 默认成员 19 个 | **379** |
+| **省** | **486（56 %）** |
+
+CI **完全不受影响**（它只用 `-p <crate>`）。真实项目实测见 [`docs/02-lilyco-measurements.md`](docs/02-lilyco-measurements.md)。
+
 ---
 
 ## 仓库结构
@@ -59,8 +93,9 @@
 .
 ├── docs/
 │   ├── 01-methodology.md                 ★★ 优化思路：分层决策（先看这个）
-│   ├── 00-experiment-log.md              ★ 全部实验台账（再看这个）
-│   ├── 02-lilyco-measurements.md          在真实 865 包工作区上的实测（含两个踩坑）
+│   ├── 03-build-speed.md                 ★★ 只讲「构建速度」怎么解（痛点在这里就看这个）
+│   ├── 00-experiment-log.md              ★ 全部实验台账 E1~E9（再看这个）
+│   ├── 02-lilyco-measurements.md          在真实 865 包工作区上的实测（含三个踩坑）
 │   ├── XMAKE_VS_RUST_PIPELINE.md          R1 对标 xmake：汇编层 + 全流程
 │   ├── TAURI_DEV_EFFICIENCY_PLAN.md       R2 Tauri 开发效率方案
 │   ├── TAURI_1GB_ACHIEVED.md              R3 达成 1 GB 实录（含 opt-level 标定）
@@ -81,6 +116,7 @@
 │   └── _archive.py                        生成本仓库的归档脚本
 └── experiments/
     ├── tauri-probe/                       E2~E8 的测量工程（含全部 _bench*.json）
+    ├── lilyco-measure/                    E9 真实工作区测量（measure.py + _cgu_test.py）
     ├── ip-nostd/ ip-bare/ ip-bare-gnu/    E1 的零依赖裸程序（Rust）
     ├── ip-c/ ip-c-msvc/ ip-go/            E1 的对照实现（C / Go）
     ├── ip-base/ ip-size/ ip-speed/ ip-tiny/ ip-xr/ ip-lib/ ip-std/
@@ -132,8 +168,10 @@ find target -name "*.pdb"   -printf "%s\n" | awk '{s+=$1} END {printf "pdb:   %.
 - **失去断点调试能力**：`debug = false` + `/DEBUG:NONE` 之后，WinDbg/VS 里没法设断点、看变量。
   保留的：`dbg!()` 输出（`file:line` 是编译期字面量，不受影响）、`println!`、panic 回溯的函数名。
 - **需要调试时**：`debug = "line-tables-only"` 并注释掉 `/DEBUG:NONE`，体积回到约 1.13 GB。
-- **没有在真实业务代码上验证过**：`953 MB` 是最小 Tauri 探针项目的结果；
-  依赖集不同的项目数字会变（依赖数量是主导因素，业务代码影响很小）。
+- **Tauri 探针的 953 MB 是"最小项目"的数字**；真实项目请以实测为准 ——
+  lilyco（24 成员 / 865 包）的 19 成员日常档实测 **935 MB**，
+  已在真实工作区验证过（见 [`docs/02-lilyco-measurements.md`](docs/02-lilyco-measurements.md)）。
+  依赖数量是主导因素，业务代码影响很小。
 
 ---
 

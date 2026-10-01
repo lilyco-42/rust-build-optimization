@@ -113,17 +113,46 @@ cargo build -p lilyco-binfmt --bin lbin
 
 ---
 
-## 六、可复现
+## 六、`codegen-units` 单变量（否定结果）
+
+我怀疑自己配的 `codegen-units = 16` 拖慢了冷构建（cargo 的 dev 默认是 256），实测：
+
+| 变体 | `check` 冷 | `build` 冷 | `target/` |
+|---|---|---|---|
+| A `codegen-units = 16`（部署值） | 48.2 s | **90.1 s** | **935.3 MB** |
+| B `codegen-units = 256`（cargo 默认） | 46.0 s | 95.3 s | 948.3 MB |
+
+**怀疑被证伪，16 更优，保留。** 详见 [`03-build-speed.md`](03-build-speed.md)。
+
+---
+
+## 七、可复现
 
 ```bash
 cd D:/Code/lilyco
 
-cargo clean && cargo check     # 53.6s / 64 crate
-cargo clean && cargo build     # 91~134s / 252 crate
+cargo clean && cargo check     # ~48s
+cargo clean && cargo build     # ~90s
 du -sm target                  # 935 MB
 
 # 增量（注意先各自预热！）
 #   改一行 lilyco-core/src/lib.rs 后：
 cargo check                    # 2.8s
 cargo build                    # 4.9s
+
+# codegen-units 对照（会自己还原 Cargo.toml）
+python _cgu_test.py            # 约 5 分钟，结果写 _cgu.json
 ```
+
+> 📐 **crate 计数的口径**：`cargo check` 输出的 `Checking xxx` **行数约 188**，
+> 但其中包含同一 crate 因 feature 组合不同而被重复检查的次数；
+> 去重后的 crate 数约 **64**。两个数都对，看你要什么口径 —— **跨变体比较时用同一个口径即可**。
+> 同理 `cargo build` 的 `Compiling` 行数为 252（这个基本等于去重后的数量）。
+
+---
+
+## 八、关于「构建速度」的独立文档
+
+本文只记录**测量事实**。要把速度作为目标去优化，见
+[`03-build-speed.md`](03-build-speed.md) —— 那里区分了**内环速度**与**冷构建速度**，
+并列出哪些刀对速度**零收益**（`/DEBUG:NONE`、`debug = false`、去掉 `staticlib`…）。
