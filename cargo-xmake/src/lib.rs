@@ -22,6 +22,7 @@ pub mod config;
 pub mod dynify;
 pub mod plan;
 pub mod run;
+pub mod slim;
 pub mod util;
 
 use cli::{Opts, Parsed};
@@ -62,6 +63,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "doctor" => cmd_doctor(&root, &parsed.opts, &style).unwrap_or_else(|| 0),
         "audit" => cmd_audit(&root, &parsed, &style).unwrap_or_else(|| 0),
         "dynify" => cmd_dynify(&root, &parsed, &style).unwrap_or_else(|| 0),
+        "slim" => slim::cmd_slim(&root, &parsed.opts, &style).unwrap_or_else(|| 0),
         "selftest" => cmd_selftest(&root, &style).unwrap_or_else(|| 0),
         _ => cmd_passthrough(&root, &parsed, &style),
     }
@@ -317,7 +319,21 @@ fn cmd_undo(root: &Path, opts: &Opts, style: &Style) -> Option<i32> {
         );
     }
 
-    if touched == 0 && !rep.changed && !rep.removed_file {
+    // ---- 3. slim：删掉 default-members ----
+    // 只删带 `# cargo-xmake-slim` 标记的**我们自己写的那一行**；
+    // 用户原有的 default-members 从一开始就不让覆盖，所以这里碰不到它。
+    let ws = util::cargo_workspace_root(root).unwrap_or_else(|| root.to_path_buf());
+    let slim_manifest = ws.join("Cargo.toml");
+    let slim_removed = slim::undo(&slim_manifest);
+    if slim_removed {
+        println!(
+            "{} {} 移除了 default-members（恢复成原来的样子）。",
+            style.green("slim："),
+            util::pretty_path(&slim_manifest)
+        );
+    }
+
+    if touched == 0 && !rep.changed && !rep.removed_file && !slim_removed {
         println!("{} 没有发现任何 cargo-xmake 留下的改动。", style.dim("undo："));
         return Some(0);
     }

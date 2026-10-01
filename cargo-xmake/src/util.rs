@@ -437,7 +437,7 @@ fn msys_path(p: &Path) -> Option<PathBuf> {
     None
 }
 
-fn json_unescape(s: &str) -> String {
+pub(crate) fn json_unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars();
     while let Some(c) = it.next() {
@@ -465,6 +465,34 @@ fn json_unescape(s: &str) -> String {
         }
     }
     out
+}
+
+/// 跑一次 `cargo metadata`，返回 stdout 的 JSON 文本。
+///
+/// `no_deps = true` 只给成员清单（`workspace_manifest_dirs` 走这条，快得多）；
+/// `no_deps = false` 才带 resolve 依赖图 —— **slim 必须走这条**，它要靠
+/// `resolve.nodes` 算闭包。
+///
+/// 失败时把 stderr 前几行带回来：只说"失败了"不够用，
+/// 用户分不清是 manifest 语法错、不在 workspace 里，还是依赖拉不下来。
+pub fn metadata_json(root: &Path, no_deps: bool) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["metadata", "--format-version", "1"];
+    if no_deps {
+        args.push("--no-deps");
+    }
+    let out = Command::new(cargo_bin())
+        .args(args)
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("调用 cargo metadata 失败: {e}（cargo 在 PATH 里吗？）"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let head: String = err.lines().take(3).collect::<Vec<_>>().join(" / ");
+        return Err(format!("cargo metadata 失败：{}", head.trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 /// 相对当前目录显示路径，短一点。
