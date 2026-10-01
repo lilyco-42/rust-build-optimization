@@ -14,7 +14,7 @@
 use crate::cli::Opts;
 use crate::util;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub struct Plan {
@@ -133,6 +133,43 @@ pub fn execute(root: &Path, plan: &Plan, opts: &Opts, style: &util::Style) -> Ru
     }
 }
 
+// ---------------------------------------------------------------- new / init
+
+/// `cargo new` / `cargo init` 参数里，哪些 flag 后面要吃掉一个值。
+/// 漏了这张表，`--name hello proj` 里的 `hello` 就会被当成项目路径。
+const NEW_VALUE_FLAGS: &[&str] = &[
+    "--name", "--vcs", "--edition", "--registry", "--color", "--config", "-Z",
+];
+
+/// 推出 `cargo new` / `cargo init` 会把项目建在哪个目录。
+///
+/// 规则就是 cargo 自己的规则：**第一个位置参数**（跳过上表那些 flag 的值）。
+/// `cargo init` 没有位置参数时建在当前目录。
+/// 推不出来就返回 `None` —— 宁可这次不自动 setup，也不能往猜错的地方写配置
+/// （静默写错地方，比不写糟糕得多）。
+pub fn created_project_dir(base: &Path, cmd: &str, args: &[String]) -> Option<PathBuf> {
+    if cmd != "new" && cmd != "init" {
+        return None;
+    }
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a.starts_with('-') {
+            // `--name=foo` 这种内联形式不吃下一个 token
+            if !a.contains('=') && NEW_VALUE_FLAGS.contains(&a) {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        return Some(base.join(a));
+    }
+    if cmd == "init" {
+        return Some(base.to_path_buf());
+    }
+    None
+}
+
 /// cargo 是否有这个子命令？用于判断该不该加料。
 pub fn is_buildish(cmd: &str) -> bool {
     matches!(
@@ -150,7 +187,62 @@ pub fn is_buildish(cmd: &str) -> bool {
             | "rustc"
             | "doc"
             | "fix"
-            | "install"
-            | "nextest"
+        | "install"
+        | "nextest"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn new_targets_the_first_positional() {
+        let d = created_project_dir(Path::new("/w"), "new", &s(&["hello"])).unwrap();
+        assert_eq!(d, Path::new("/w").join("hello"));
+        let d = created_project_dir(Path::new("/w"), "new", &s(&["--lib", "hello"])).unwrap();
+        assert_eq!(d, Path::new("/w").join("hello"));
+    }
+
+    #[test]
+    fn flag_values_are_never_mistaken_for_the_path() {
+        for (flag, val) in [
+            ("--name", "hello"),
+            ("--vcs", "none"),
+            ("--edition", "2021"),
+            ("--registry", "crates-io"),
+        ] {
+            let args = s(&[flag, val, "proj"]);
+            let d = created_project_dir(Path::new("/w"), "new", &args).unwrap();
+            assert_eq!(d, Path::new("/w").join("proj"), "{flag} {val} 被误认成路径了");
+        }
+        // 内联形式不吃下一个 token
+        let d = created_project_dir(Path::new("/w"), "new", &s(&["--name=hello", "proj"])).unwrap();
+        assert_eq!(d, Path::new("/w").join("proj"));
+    }
+
+    #[test]
+    fn init_without_path_is_the_current_dir() {
+        assert_eq!(
+            created_project_dir(Path::new("/w"), "init", &s(&[])).unwrap(),
+            Path::new("/w").to_path_buf()
+        );
+        assert_eq!(
+            created_project_dir(Path::new("/w"), "init", &s(&["--lib"])).unwrap(),
+            Path::new("/w").to_path_buf()
+        );
+    }
+
+    #[test]
+    fn unknown_target_is_not_guessed() {
+        // `cargo new` 必须有路径；推不出来就 None，绝不退回当前目录乱写
+        assert!(created_project_dir(Path::new("/w"), "new", &s(&["--bin"])).is_none());
+        assert!(created_project_dir(Path::new("/w"), "new", &s(&[])).is_none());
+        // 别的子命令不走这条路
+        assert!(created_project_dir(Path::new("/w"), "build", &s(&["hello"])).is_none());
+    }
 }

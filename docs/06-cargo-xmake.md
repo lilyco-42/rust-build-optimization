@@ -456,6 +456,33 @@ unsize 强转是自动发生的。这是整件事成立的关键，也让改写�
 （源码 md5 逐字节还原、二次 undo 幂等、release 零代价、
 **同一份 config 下 dev 产物确实更小**、多约束函数被预期拒绝等）。
 
+### 3.8 🔴 `cargo xmake new` / `init` 自动 setup
+
+「新建项目直接是 xmake 档」是工具「爽用」的最后一截缺口。
+
+早期 `cargo xmake new hello` 只是原样转发给 `cargo new` —— 项目建好了，
+但**没**生成 `.cargo/config.toml`，用户还得手动补一句 `cargo xmake setup`。
+所以「新建项目自动变小」是假的。
+
+现在 `cmd_passthrough` 在 `cargo new`/`init` 退出码为 0 之后，
+用 `run::created_project_dir` 推出项目落在哪个目录，再对那个目录跑一次 `config::apply`。
+
+三条安全边界，缺一条就不该自动写配置：
+
+1. **只在 cargo 成功（退出码 0）之后**才动；建失败不碰任何东西；
+2. **只在那个目录里确实有 `Cargo.toml` 时**才写 —— 推错目录要说出来，绝不静默跳过
+   （静默-0 反模式：不吭声会让用户以为「已经 setup 过了」）；
+3. 写了什么、怎么撤销**当场讲清楚**，并支持 `--xmk-no-setup` 整体关掉。
+
+`created_project_dir` 的取法就是 cargo 自己的规则：**第一个位置参数**，
+但要跳过 `--name`/`--vcs`/`--edition`/`--registry`/`--color`/`--config`/`-Z`
+这些会吃掉下一个值的 flag；`init` 没有位置参数就落在当前目录。
+推不出来就返回 `None` —— 宁可这次不自动 setup，也不能往猜错的地方写。
+
+> `new`/`init` 的 `cargo` 工作目录用的是 `cwd` 而不是 workspace 根：
+> 在 workspace 子目录里跑 `cargo xmake new foo`，用根会把项目建到 workspace 根去，
+> 而 cargo 自己是建在 cwd 的。其余命令反过来 —— 它们要在 workspace 根跑，缓存才共用。
+
 ---
 
 ## 四、端到端验证

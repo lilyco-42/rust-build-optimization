@@ -280,6 +280,27 @@ else
   ok "audit 把自己生成的 human/ 报告清理干净了"
 fi
 
+# ══════════════════════════════════════════════════════════════════════
+# 10. cargo xmake new 自动 setup —— "新建项目直接是 xmake 档" 这条主张
+#
+# 历史上 cargo xmake new 只是原样转发给 cargo new，项目建好但**没**生成
+# .cargo/config.toml，用户还得手动补一句 setup 才吃上设置。这一步验：
+#   ① 建完自动 setup；② 配置带标记、关了调试信息；③ undo 能干净撤掉；
+#   ④ --xmk-no-setup 真的跳过。
+# ══════════════════════════════════════════════════════════════════════
+step "10. cargo xmake new 自动 setup"
+cd "$WORK" || exit 1
+cargo xmake new hello > /tmp/xmk-new.log 2>&1
+if [ -f hello/Cargo.toml ]; then ok "cargo xmake new hello 创建了项目"; else bad "没创建项目"; cat /tmp/xmk-new.log; fi
+if [ -f hello/.cargo/config.toml ]; then ok "新建项目自动生成了 .cargo/config.toml（直接是 xmake 档）"; else bad "新建项目没自动 setup"; cat /tmp/xmk-new.log; fi
+if grep -q 'cargo-xmake' hello/.cargo/config.toml 2>/dev/null; then ok "自动配置带 cargo-xmake 标记"; else bad "自动配置没标记"; fi
+if grep -q 'debug = false\|debug=false' hello/.cargo/config.toml 2>/dev/null; then ok "自动配置关了调试信息（debug=false）"; else bad "自动配置没关调试信息"; fi
+(cd hello && cargo xmake undo > /tmp/xmk-new-undo.log 2>&1)
+if [ ! -f hello/.cargo/config.toml ]; then ok "undo 把自动 setup 的配置清掉了"; else bad "undo 没清掉自动配置"; cat /tmp/xmk-new-undo.log; fi
+# --xmk-no-setup 分支：建项目但不写配置
+cargo xmake new hello2 --xmk-no-setup > /tmp/xmk-new2.log 2>&1
+if [ -f hello2/.cargo/config.toml ]; then bad "--xmk-no-setup 仍然自动 setup 了"; else ok "--xmk-no-setup 没自动 setup（项目仍是纯 cargo 状态）"; fi
+
 echo
 echo "================ 结果：${pass} 通过 / ${fail} 失败 ================"
 if [ -n "${KEEP_SMOKE:-}" ]; then
