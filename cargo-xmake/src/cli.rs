@@ -289,7 +289,19 @@ pub fn parse(argv: &[String]) -> Result<Parsed, Vec<String>> {
                 kept.push(t);
             }
         }
-        strip_bare(&kept, &mut opts, &cmd, &mut errs)
+        let kept = strip_bare(&kept, &mut opts, &cmd, &mut errs);
+        // 位置参数 = 要扫描的路径（`dynify` / `undo` 用它限定范围）。
+        // ⚠️ 这里原来漏了赋值，于是 `opts.paths` 恒为空 —— `cargo xmake dynify <path>`
+        // **静默忽略**路径，永远退回 `root/src`；在 workspace 根下没有 `src/`，
+        // 结果是"扫到 0 个泛型函数"这种看着像结论的假数据。
+        if matches!(cmd.as_str(), "dynify" | "undo") {
+            opts.paths = kept
+                .iter()
+                .filter(|a| !a.starts_with('-'))
+                .cloned()
+                .collect();
+        }
+        kept
     } else {
         // cargo 命令：顺手看有没有 --release / --profile
         let mut it = cmd_args.iter().peekable();

@@ -243,6 +243,9 @@ fn cmd_undo(root: &Path, opts: &Opts, style: &Style) -> Option<i32> {
     // ---- 1. 源码：把 dynify 生成的一对 cfg 分支折叠回泛型版本 ----
     // 靠 `// cargo-xmake:dyn` 标记做结构性逆变换，不依赖备份文件
     // （备份在验证通过后就删了；留着又会覆盖用户后续的编辑）。
+    if let Err(e) = dynify::check_paths(&opts.paths, root) {
+        return fail(style, &e);
+    }
     let files = dynify::rs_files(&opts.paths, root);
     let mut reverted = 0usize;
     let mut touched = 0usize;
@@ -448,6 +451,9 @@ fn cmd_audit(root: &Path, p: &Parsed, style: &Style) -> Option<i32> {
     }
     let (groups, roots) = audit::group(&entries);
     let n_entries: usize = entries.iter().map(|e| e.count).sum();
+    // 谁的地盘：本地（dynify 能改）还是 std/依赖（改不到）。
+    // 这个区分决定了下面结论段能不能给出"做得到"的建议。
+    let (dep_crates, local_crates) = util::crate_name_sets(root);
     let rep = audit::Report {
         package: opts
             .package
@@ -459,6 +465,8 @@ fn cmd_audit(root: &Path, p: &Parsed, style: &Style) -> Option<i32> {
         entries: n_entries,
         groups,
         roots,
+        local_crates,
+        dep_crates,
     };
 
     println!();
@@ -539,7 +547,24 @@ fn cmd_audit(root: &Path, p: &Parsed, style: &Style) -> Option<i32> {
         let (key, tag) = if vtable {
             (key, style.dim("  · vtable，每类型一份，dyn 去不掉"))
         } else if duplicated {
-            (style.bold(&key), style.yellow("  · 可 dyn 化"))
+            // ⚠️ 光是"被复制了"不等于"我们改得到"。真实项目里被复制得最凶的
+            // 几乎全是 std/alloc 的泛型（`Iterator::fold`、`Vec::extend_desugared`…），
+            // 而 dynify 只能改本 workspace 的源码 —— 不标出来，
+            // 用户会以为跑一下 dynify 就能省 44%。
+            match rep.place(&g.key) {
+                audit::Place::Local => (
+                    style.bold(&key),
+                    style.yellow("  · 可 dyn 化（在你的源码里）"),
+                ),
+                audit::Place::Dep => (
+                    key,
+                    style.dim("  · 被复制，但在**依赖库**里，dynify 改不到"),
+                ),
+                audit::Place::Std => (
+                    key,
+                    style.dim("  · 被复制，但在标准库里，dynify 改不到"),
+                ),
+            }
         } else {
             (key, String::new())
         };
@@ -565,12 +590,14 @@ fn cmd_audit(root: &Path, p: &Parsed, style: &Style) -> Option<i32> {
     // ---- 结论 ----
     let re = rep.reclaimable();
     let inherent = rep.type_inherent();
+    let local = rep.reclaimable_local();
+    let foreign = rep.reclaimable_foreign();
     println!();
     if re == 0 {
         println!("{}", style.green("结论： 没有可 dyn 化的泛型函数热点了。"));
     } else {
         print!(
-            "{} 有 {} 份是「同一个泛型函数体被复制」（黄色那些）",
+            "{} 有 {} 份是「同一个泛型函数体被复制」",
             style.bold("结论："),
             style.yellow(&re.to_string())
         );
@@ -584,15 +611,53 @@ fn cmd_audit(root: &Path, p: &Parsed, style: &Style) -> Option<i32> {
             }
         }
         println!("。");
+        let local_pct = local as f64 * 100.0 / n_entries.max(1) as f64;
         println!(
-            "  把那些函数改成 `&dyn Trait`，预期能少掉约 {:.0}% 的单态化份数。",
-            re as f64 * 100.0 / n_entries as f64
+            "  其中 {} 份在**你的源码**里（{}），另外 {} 份在依赖库/标准库里（{}）。",
+            style.yellow(&local.to_string()),
+            style.cyan("dynify 能改"),
+            style.dim(&foreign.to_string()),
+            style.dim("改不到")
         );
-        println!(
-            "  {} 下一个动作：{}",
-            style.dim(""),
-            style.bold_cyan("cargo xmake dynify")
-        );
+        if local == 0 {
+            println!(
+                "  {}",
+                style.bold("这个项目的泛型复制全在你的代码之外，dynify 在这里帮不上忙。")
+            );
+            println!(
+                "  {}",
+                style.dim(
+                    "  想压掉这部分只能从别处下手：减少具体类型数量（比如给泛型参数做类型擦除）、\
+                     换掉泛型重的依赖、或用 `cargo xmake setup` 先拿编译速度。"
+                )
+            );
+        } else if local_pct < 1.0 {
+            // 本地份数在总量里不到 1% —— 老实说"不值得做"，别把 dynify 塞给用户
+            println!(
+                "  {} 本地那 {} 份就算全改掉，也只占总份数的 {:.2}% —— {}",
+                style.bold("收益很小："),
+                local,
+                local_pct,
+                style.dim("dynify 在这个项目上不值得做。")
+            );
+            println!(
+                "  {}",
+                style.dim(
+                    "  真正的大头是上面那些标准库/依赖里的泛型，和每类型一份的 vtable 槽位 ——\
+                     两条路 dynify 都碰不到。"
+                )
+            );
+        } else {
+            println!(
+                "  改本地那些，预期能少掉约 {:.0}% 的单态化份数。",
+                local_pct
+            );
+            println!(
+                "  {} 下一个动作：{}",
+                style.dim(""),
+                style.bold_cyan("cargo xmake dynify")
+            );
+        }
     }
     if inherent > 0 {
         println!(
@@ -637,6 +702,11 @@ fn read_pkg_name(root: &Path) -> Option<String> {
 
 fn cmd_dynify(root: &Path, p: &Parsed, style: &Style) -> Option<i32> {
     let opts = &p.opts;
+    // 显式给了路径就先验一遍：不存在的路径要当场报错，
+    // 不能让它退化成"扫到 0 个泛型函数"（那会被当成结论）
+    if let Err(e) = dynify::check_paths(&opts.paths, root) {
+        return fail(style, &e);
+    }
     let cands = match dynify::scan_paths(&opts.paths, root) {
         Ok(c) => c,
         Err(e) => return fail(style, &e),

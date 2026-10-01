@@ -125,6 +125,73 @@ pub struct Report {
     pub entries: usize,
     pub groups: Vec<Group>,
     pub roots: usize,
+    /// 本 workspace 的成员 crate 名（`-` 已换成 `_`）—— 这些源码 dynify 能改
+    pub local_crates: Vec<String>,
+    /// 依赖图里的所有 crate 名 —— 这些 dynify **改不到**
+    pub dep_crates: Vec<String>,
+}
+
+/// 一个单态化根**在谁的地盘上**。
+///
+/// 这个区分是审计能不能给人正确建议的关键。实测一个真实 crate：
+/// 排名前 12 的热点全在 `std`/`alloc`/`core`，而本地函数的份数全是 1 ——
+/// 不区分的话会报出"去泛型能省 44%"，而那是**根本做不到**的。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Place {
+    /// 在我们能改的源码里（本 workspace 成员，或没带 crate 名的模块路径）
+    Local,
+    /// 第三方依赖 —— 我们改不到
+    Dep,
+    /// 标准库 / core / alloc / proc_macro / test
+    Std,
+}
+
+impl Report {
+    /// 判定某个根的归属。判据见 `util::crate_name_sets` 的注释。
+    pub fn place(&self, key: &str) -> Place {
+        // 去掉 `<# as ` 前缀，露出真正的类型/路径；`<# as std::…>` 也算 std
+        let k = key.strip_prefix("<# as ").unwrap_or(key);
+        let first = k
+            .split("::")
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('<')
+            .trim_end_matches('>');
+        if first.is_empty() {
+            return Place::Local; // 裸名（没有 `::`），只可能是本 crate 的顶层项
+        }
+        if matches!(first, "std" | "core" | "alloc" | "proc_macro" | "test") {
+            return Place::Std;
+        }
+        if self.local_crates.iter().any(|c| c == first) {
+            return Place::Local;
+        }
+        if self.dep_crates.iter().any(|c| c == first) {
+            return Place::Dep;
+        }
+        // 既不是 std、也不是任何包名 → 是本 crate 里的模块路径（mono-stats 的本地名
+        // 不带 crate 名），所以算本地
+        Place::Local
+    }
+
+    /// 只在**本地源码**里、且确实被复制了的份数 —— 这才是 dynify 能兑现的量。
+    /// `reclaimable()` 是理论值（含 std 与依赖），这里是可执行值。
+    pub fn reclaimable_local(&self) -> usize {
+        self.groups
+            .iter()
+            .filter(|g| g.duplicated() && self.place(&g.key) == Place::Local)
+            .map(|g| g.count - 1)
+            .sum()
+    }
+
+    /// 本地 + 依赖里被复制的份数（即 `reclaimable()`，留作对照）
+    pub fn reclaimable_foreign(&self) -> usize {
+        self.groups
+            .iter()
+            .filter(|g| g.duplicated() && self.place(&g.key) != Place::Local)
+            .map(|g| g.count - 1)
+            .sum()
+    }
 }
 
 impl Report {
@@ -179,11 +246,17 @@ impl Report {
     }
 
     /// 每个具体类型必然一份的量（vtable / impl），dyn 化动不了它。
+    /// `<# as Trait>::` 形态的总份数 —— 每个具体类型必然一份，dyn 化消不掉。
+    ///
+    /// ⚠️ 这里取**全量** `count`，不是 `count - 1`。`reclaimable()` 用 `count - 1`
+    /// 是因为"合并后至少留 1 份"，而 vtable 槽位是**每一份都真实存在**、
+    /// 一个也省不掉 —— 两边的口径本来就不同。早先这里写成 `count - 1`，
+    /// 于是显示"另有 N 份"时 N 比实际少 1（且与它自己的措辞对不上）。
     pub fn type_inherent(&self) -> usize {
         self.groups
             .iter()
             .filter(|g| is_trait_method(&g.key) && g.count > 1)
-            .map(|g| g.count - 1)
+            .map(|g| g.count)
             .sum()
     }
 }
@@ -205,6 +278,17 @@ pub fn is_trait_method(key: &str) -> bool {
 ///   * `<T0 as Work>::step`        —— 开头是 `<具体类型 as Trait>`，
 ///                                    把 `as` 之前换成 `#`          → `<# as Work>::step`
 pub fn normalize(name: &str) -> (String, bool) {
+    // mangling 字母表是纯 ASCII（base62 + `_`/`$`/`.`），所以下面可以放心按字节推进、
+    // 并靠 `out.push(b as char)` 1:1 地构造 `out`（ASCII 字节 → 同一个字符，仍占 1 字节，
+    // 于是 `out` 的下标与 `name` 的下标始终对齐）。
+    //
+    // ⚠️ 非 ASCII 会同时破坏这两条：`0xE7 as char` 是 `'ç'`，占 2 字节 —— 既是 mojibake，
+    // 又让 `out` 与 `name` 的下标错位，后面 `&out[1..close]` / `&out[close + 1..]` 就会切错。
+    // 真出现非 ASCII（理论上只有野路子 `-C link-args` 才可能）就别猜了：
+    // 原样返回、标记为"没归一化"，好过产出一串看着像结论的错东西。
+    if !name.is_ascii() {
+        return (name.to_string(), false);
+    }
     let mut generic = false;
     let mut out = String::with_capacity(name.len());
     let b = name.as_bytes();
@@ -592,18 +676,28 @@ fn cargo_rustc(
     Ok(RunOut { text, code })
 }
 
-/// `-Zdump-mono-stats` 会把报告写进 **crate 根目录的 `human/`**，不是 target。
-/// 这里列出目录内容，好在读完之后把"我们刚生成的那些"精确删掉。
-fn list_mono_stats(root: &Path) -> Vec<PathBuf> {
+/// `-Zdump-mono-stats=<dir>` 的报告写在 `<dir>/<crate>.mono_items.json`，
+/// 其中 `<dir>` 相对 **rustc 的 cwd —— 也就是 cargo 的 workspace 根**。
+/// 单 crate 项目里它和包根重合；workspace 里不是（实测报告落在 workspace 根）。
+/// 所以这里把候选目录都列出来，两边都看。
+///
+/// 返回 `(路径, mtime)`：**必须带上 mtime** —— 报告文件名由 crate 名决定，
+/// 重跑是**覆盖同名文件**而不是新建，只看路径差集会把"刚生成的那份"漏掉，
+/// 进而误读上一次的陈旧数据。
+fn list_mono_stats(root: &Path) -> Vec<(PathBuf, SystemTime)> {
     let mut v = Vec::new();
-    let Ok(rd) = std::fs::read_dir(root.join("human")) else {
-        return v;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if n.ends_with(".mono_items.json") || n.ends_with(".mono_items.md") {
-            v.push(p);
+    for d in util::mono_stats_dirs(root) {
+        let Ok(rd) = std::fs::read_dir(d.join("human")) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if n.ends_with(".mono_items.json") || n.ends_with(".mono_items.md") {
+                if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                    v.push((p, m));
+                }
+            }
         }
     }
     v
@@ -629,30 +723,36 @@ pub fn collect(root: &Path, opts: &Opts) -> Result<(Vec<Entry>, Source, String),
         ];
         let r = cargo_rustc(root, &pkg, release, &extra, opts, true)?;
         let after = list_mono_stats(root);
-        let fresh: Vec<PathBuf> = after.iter().filter(|p| !before.contains(p)).cloned().collect();
+        // 「本次生成的」= 路径新出现，**或** 同名但 mtime 变了（重跑是覆盖）
+        let fresh: Vec<PathBuf> = after
+            .iter()
+            .filter(|(p, m)| {
+                !before
+                    .iter()
+                    .any(|(bp, bm)| bp == p && bm == m)
+            })
+            .map(|(p, _)| p.clone())
+            .collect();
         let target = fresh
             .iter()
             .find(|p| p.to_string_lossy().ends_with(".json"))
-            .cloned()
-            .or_else(|| {
-                after
-                    .iter()
-                    .filter(|p| p.to_string_lossy().ends_with(".json"))
-                    .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
-                    .cloned()
-            });
+            .cloned();
         if let Some(f) = target {
             if let Ok(txt) = std::fs::read_to_string(&f) {
                 let parsed = parse_mono_stats_json(&txt);
                 if !parsed.is_empty() {
-                    // 精确清理：只删本次新出现的报告文件，外加我们读的那个
+                    // 精确清理：只删**本次生成**的文件（fresh 里已含我们读的那个），
+                    // 用户手工留下的旧报告一律不碰
                     let mut removed = 0usize;
-                    for p in fresh.iter().chain(std::iter::once(&f)) {
+                    for p in &fresh {
                         if std::fs::remove_file(p).is_ok() {
                             removed += 1;
                         }
                     }
-                    let _ = std::fs::remove_dir(root.join("human")); // 目录空了才会成功
+                    // 目录空了才会成功 —— 两边都试一下（报告可能落在 workspace 根）
+                    for d in util::mono_stats_dirs(root) {
+                        let _ = std::fs::remove_dir(d.join("human"));
+                    }
                     let diag = format!(
                         "读到 {} 条；已清理 rustc 生成的 {removed} 个 human/ 报告文件",
                         parsed.len()
@@ -662,9 +762,13 @@ pub fn collect(root: &Path, opts: &Opts) -> Result<(Vec<Entry>, Source, String),
             }
         }
         if opts.mode == AuditMode::Stats {
+            let looked: Vec<String> = util::mono_stats_dirs(root)
+                .iter()
+                .map(|d| d.join("human").display().to_string())
+                .collect();
             return Err(format!(
                 "没读到 mono-stats 报告（找过 {}）。cargo 输出：\n{}",
-                root.join("human").display(),
+                looked.join(" 和 "),
                 tail(&r.text, 12)
             ));
         }
@@ -1193,10 +1297,13 @@ mod tests {
             entries,
             groups,
             roots,
+            local_crates: vec!["t".into()],
+            dep_crates: vec!["serde".into()],
         };
         // 只有 drive 的 199 份重复可回收；step 的那份是 vtable 槽位，不算
         assert_eq!(rep.reclaimable(), 199);
-        assert_eq!(rep.type_inherent(), 1);
+        // 两个具体类型 → 两个 vtable 槽位，一个也省不掉（口径是**全量**，见其注释）
+        assert_eq!(rep.type_inherent(), 2);
         assert_eq!(rep.reclaimable_cost(), Some(8000 - 40));
     }
 
@@ -1226,5 +1333,61 @@ mod tests {
                 assert!(g.duplicated() ^ g.is_vtable_slot(), "{} 判定不互斥", g.key);
             }
         }
+    }
+
+    /// 🔴 真实项目回归：**"被复制了"不等于"我们改得到"**。
+    ///
+    /// 实测 `lilyco-binfmt`：排名前 12 的热点全在 std/alloc/core
+    /// （`<# as Iterator>::fold` 657 份、`Vec::<#>::extend_desugared` 149 份…），
+    /// 而本地函数的份数全是 1。老版本把这 9616 份全算成"可 dyn 化"，
+    /// 报出"预期能少掉约 44%" —— 一个**根本做不到**的结论。
+    #[test]
+    fn place_separates_local_from_std_and_deps() {
+        let txt = r#"[
+            {"name": "<T1 as std::iter::Iterator>::fold", "instantiation_count": 657, "size_estimate": 44, "total_estimate": 28908},
+            {"name": "std::vec::Vec::<T2>::extend_desugared", "instantiation_count": 149, "size_estimate": 47, "total_estimate": 7003},
+            {"name": "core::num::<T3>::pow", "instantiation_count": 3, "size_estimate": 5, "total_estimate": 15},
+            {"name": "serde::de::impls::<T4>::deserialize", "instantiation_count": 5, "size_estimate": 9, "total_estimate": 45},
+            {"name": "office_doc::run_office_doc", "instantiation_count": 1, "size_estimate": 5652, "total_estimate": 5652},
+            {"name": "scan::walk", "instantiation_count": 4, "size_estimate": 30, "total_estimate": 120}
+        ]"#;
+        let e = parse_mono_stats_json(txt);
+        let (groups, roots) = group(&e);
+        let entries: usize = e.iter().map(|x| x.count).sum();
+        let rep = Report {
+            package: "lilyco-binfmt".into(),
+            profile: "dev".into(),
+            source: Source::MonoStats,
+            entries,
+            groups,
+            roots,
+            // workspace 成员名（本 crate 与其兄弟 crate）
+            local_crates: vec!["lilyco_binfmt".into(), "lilyco_core".into()],
+            dep_crates: vec!["serde".into(), "serde_json".into()],
+        };
+
+        assert_eq!(rep.place("<# as std::iter::Iterator>::fold"), Place::Std);
+        assert_eq!(rep.place("std::vec::Vec::<#>::extend_desugared"), Place::Std);
+        assert_eq!(rep.place("core::num::<#>::pow"), Place::Std);
+        assert_eq!(rep.place("serde::de::impls::<#>::deserialize"), Place::Dep);
+        // 本地 item 不带 crate 名（mono-stats 的本地名就是模块路径）→ 本地
+        assert_eq!(rep.place("office_doc::run_office_doc"), Place::Local);
+        assert_eq!(rep.place("scan::walk"), Place::Local);
+        // 裸名（没有 `::`）只可能是本 crate 顶层项
+        assert_eq!(rep.place("drive"), Place::Local);
+
+        // 理论可回收 = 本地 + 依赖 + std 全算；可执行 = 只有本地那部分
+        // 注意 `<# as Iterator>::fold` 那 657 份虽然最大，但它是 **trait 方法**，
+        // 按定义归 vtable 槽位、不算可回收 —— 真实项目里最大的热点往往正是这种。
+        assert_eq!(rep.reclaimable(), 148 + 2 + 4 + 3);
+        assert_eq!(rep.reclaimable_local(), 3, "只有 scan::walk 那 3 份是本地可回收");
+        assert_eq!(rep.reclaimable_foreign(), 148 + 2 + 4);
+        assert!(
+            rep.reclaimable_local() < rep.reclaimable(),
+            "本地的可回收量必须严格小于理论值 —— 这正是老版本给出错误结论的原因"
+        );
+        // 另一个容易搞反的点：`reclaimable()` 里**不含** vtable 槽位，
+        // 而真实项目最大的热点恰好全是 trait 方法（657 那份就没被算进去）
+        assert_eq!(rep.type_inherent(), 657, "fold 的 657 份是 vtable 槽位");
     }
 }

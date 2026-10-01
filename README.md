@@ -35,7 +35,7 @@
 `cargo xmake setup` 一步拿到 xmake 档的 dev，`cargo xmake audit` 排出单态化热点，
 `cargo xmake dynify` 把热点改成 **dev 走 `&dyn Trait` / release 走 `<T: Trait>`**。
 
-实测（三份干净副本，只跑 `build` / `build --release`）：N=200 的对照工程上
+实测（三份干净副本，只跑 `build` / `build --release`）：N=200 的**合成**对照工程上
 
 | | dev 单态化 | `target/` | dev exe | release exe |
 |---|---|---|---|---|
@@ -45,6 +45,13 @@
 
 **release 档四项数字与只 `setup` 时逐项相同** —— 静态派发原样恢复，运行时零代价。
 （原样的 release 更小是吃到了用户全局 `opt-level="z"`，不是我们的功劳。）
+
+> ⚠️ **这张表的前提是"合成工程"，它只证明机制成立，不代表你的项目能省这么多。**
+> 拿真实的 `lilyco-binfmt` 跑一遍：单态化 21623 份里被复制的有 9616 份，
+> 其中**只有 8 份（0.04%）在你自己的源码里**，其余全在标准库/依赖 ——
+> `dynify` 结构上就够不着。84 个泛型函数里只有 1 个符合改写条件。
+> **这类项目上 `dynify` 不值得做**，`audit` 现在会直说。
+> 完整对比见 [`cargo-xmake/README.md`](cargo-xmake/#-真实项目上是什么样这一节比上面的数字都重要)。
 
 `cargo xmake undo` 两半都能回：配置按 `# cargo-xmake` 标记删行，
 源码按 `// cargo-xmake:dyn` 标记把 `cfg` 分支对折叠回泛型原样，**逐字节**还原，

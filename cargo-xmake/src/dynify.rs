@@ -48,6 +48,24 @@ pub struct Candidate {
     pub reject: Option<String>,
 }
 
+/// 字节 `b` 起的 UTF-8 序列长度（1–4）。
+/// 传进来续字节（`0x80..=0xBF`）时返回 1 —— 保守，只用于"别越界地往前走"，
+/// 不用于判断字符是否合法。
+#[inline]
+fn utf8_len(b: u8) -> usize {
+    if b < 0x80 {
+        1
+    } else if b >= 0xF0 {
+        4
+    } else if b >= 0xE0 {
+        3
+    } else if b >= 0xC0 {
+        2
+    } else {
+        1
+    }
+}
+
 /// 按顶层逗号切分（跳过 `<>` / `()` / `[]` 里的逗号）
 /// —— `T: Into<Vec<u8>>, U` 必须切成两段而不是三段。
 fn split_top_commas(s: &str) -> Vec<String> {
@@ -206,25 +224,10 @@ pub fn revert(src: &str) -> (String, usize) {
     (out, n)
 }
 
-/// `revert` 该扫哪些文件：默认 `<root>/src/**/*.rs`，也可由用户显式给路径，
-/// 与 `scan_paths` 的取文件逻辑保持一致。
+/// `revert` 该扫哪些文件：与 `scan_paths` 完全一致（共用 `collect_from_roots`），
+/// 否则会出现"扫的时候改了、撤的时候没撤到"的漏还原。
 pub fn rs_files(paths: &[String], root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = Vec::new();
-    if paths.is_empty() {
-        collect_rs(&root.join("src"), &mut files);
-    } else {
-        for p in paths {
-            let pb = PathBuf::from(p);
-            let pb = if pb.is_absolute() { pb } else { root.join(pb) };
-            if pb.is_dir() {
-                collect_rs(&pb, &mut files);
-            } else if pb.is_file() {
-                files.push(pb);
-            }
-        }
-    }
-    files.sort();
-    files
+    collect_from_roots(paths, root)
 }
 
 // ---------------------------------------------------------------- 扫描
@@ -248,21 +251,32 @@ impl<'a> Scanner<'a> {
             .count()
             + 1
     }
-    /// 跳到下一个 ident 边界
+    /// 跳到下一个 ident 边界。
+    ///
+    /// ⚠️ 两个循环都必须**按整个 UTF-8 字符**步进，不能 `i += 1` 乱走：
+    /// 否则 `i` 会停在多字节字符中间，`start` 就不再是字符边界，
+    /// 后面的 `from_utf8_lossy(&s[start..i])` 或任何 `&text[..]` 切片都会崩。
     fn next_word(&mut self) -> Option<(usize, String)> {
         while self.i < self.s.len() {
             let c = self.s[self.i];
-            if c.is_ascii_alphabetic() || c == b'_' {
+            // 首字符：ASCII 字母 / `_` / 任何非 ASCII（Rust 允许 Unicode 标识符）
+            if c.is_ascii_alphabetic() || c == b'_' || c >= 0x80 {
                 let start = self.i;
-                while self.i < self.s.len()
-                    && (self.s[self.i].is_ascii_alphanumeric() || self.s[self.i] == b'_')
-                {
-                    self.i += 1;
+                while self.i < self.s.len() {
+                    let d = self.s[self.i];
+                    if d.is_ascii_alphanumeric() || d == b'_' {
+                        self.i += 1;
+                    } else if d >= 0x80 {
+                        self.i = (self.i + utf8_len(d)).min(self.s.len());
+                    } else {
+                        break;
+                    }
                 }
+                // start..self.i 一定落在字符边界上，所以这里能安全地切片
                 let w = String::from_utf8_lossy(&self.s[start..self.i]).to_string();
                 return Some((start, w));
             }
-            self.i += 1;
+            self.i += utf8_len(c);
         }
         None
     }
@@ -351,13 +365,22 @@ pub fn scan_text(text: &str, path: &Path) -> Vec<Candidate> {
 
 /// 从 `fn` 关键字位置向前扩展，覆盖可见性修饰符、`unsafe`/`async`/`const`/`extern`
 /// 以及 `#[...]` 属性，返回整个 item 的起点。
+///
+/// ⚠️ 这里所有按字节回溯的判断**必须用 `is_ascii_whitespace` / `is_ascii_alphanumeric`**，
+/// 绝不能用 `(b as char).is_whitespace()` —— 那是个会 panic 的陷阱：
+/// `b` 是单个字节，`0xBA as char` 是 `'º'`，而 `'º'.is_alphanumeric() == true`；
+/// 中文 UTF-8 的续字节里 0xBA 极常见（`示` = `E7 A4 BA`、`中` 附近俯拾皆是），
+/// 于是回溯会一头扎进多字节字符的中间，随后的 `&text[k..end]` 直接
+/// `byte index N is not a char boundary` panic。
+/// （`is_whitespace` 同理：`0xA0 as char` 是 NBSP、`0x85 as char` 是 NEL，都算空白。）
+/// ASCII 字节永远不会出现在多字节序列内部，所以 ASCII 判断天然安全。
 fn item_start(text: &str, fn_pos: usize) -> usize {
     let b = text.as_bytes();
     let mut i = fn_pos;
     loop {
         // 向前跳过空白
         let mut j = i;
-        while j > 0 && (b[j - 1] as char).is_whitespace() {
+        while j > 0 && b[j - 1].is_ascii_whitespace() {
             j -= 1;
         }
         if j == 0 {
@@ -385,11 +408,11 @@ fn item_start(text: &str, fn_pos: usize) -> usize {
             }
             let Some(op) = open else { return i };
             let mut q = op;
-            while q > 0 && (b[q - 1] as char).is_whitespace() {
+            while q > 0 && b[q - 1].is_ascii_whitespace() {
                 q -= 1;
             }
             let mut r = q;
-            while r > 0 && ((b[r - 1] as char).is_alphanumeric() || b[r - 1] == b'_') {
+            while r > 0 && (b[r - 1].is_ascii_alphanumeric() || b[r - 1] == b'_') {
                 r -= 1;
             }
             if &text[r..q] == "pub" {
@@ -418,7 +441,7 @@ fn item_start(text: &str, fn_pos: usize) -> usize {
             }
             let Some(op) = open else { return i };
             let mut q = op;
-            while q > 0 && (b[q - 1] as char).is_whitespace() {
+            while q > 0 && b[q - 1].is_ascii_whitespace() {
                 q -= 1;
             }
             if q > 0 && b[q - 1] == b'#' {
@@ -443,7 +466,7 @@ fn item_start(text: &str, fn_pos: usize) -> usize {
 
         // 普通标识符：pub / unsafe / async / const / extern
         let mut k = end;
-        while k > 0 && ((b[k - 1] as char).is_alphanumeric() || b[k - 1] == b'_') {
+        while k > 0 && (b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'_') {
             k -= 1;
         }
         let word = &text[k..end];
@@ -535,7 +558,14 @@ fn parse_fn(text: &str, fn_pos: usize, start: usize, path: &Path) -> Option<Cand
         .collect();
 
     let mut reject = None;
-    if type_params.len() != 1 {
+    // 非 ASCII 函数名（中文标识符）：我们**不做**自动改写，显式拒绝。
+    // 原因是不想靠"恰好解析对了"—— 名字由 `next_word` 取，若名字非 ASCII
+    // 而代码里又没做字符边界处理，很容易取到后半截，进而改到别的东西上。
+    // 实测真实工程里几乎不存在这种函数（只有中文**注释**才是常态），
+    // 所以拒绝的代价远低于误改的代价。
+    if !name.is_ascii() {
+        reject = Some(format!("函数名 `{name}` 含非 ASCII 字符，暂不自动改写（请手工处理）"));
+    } else if type_params.len() != 1 {
         reject = Some(format!("泛型参数有 {} 个，只支持 1 个", type_params.len()));
     }
     let param = type_params.first().map(|p| p.split(':').next().unwrap_or("").trim().to_string());
@@ -593,22 +623,45 @@ fn parse_fn(text: &str, fn_pos: usize, start: usize, path: &Path) -> Option<Cand
 }
 
 /// 扫描一个目录下所有 .rs
-pub fn scan_paths(paths: &[String], root: &Path) -> Result<Vec<Candidate>, String> {
-    let mut files: Vec<PathBuf> = Vec::new();
-    if paths.is_empty() {
-        let src = root.join("src");
-        collect_rs(&src, &mut files);
-    } else {
-        for p in paths {
-            let pb = PathBuf::from(p);
-            let pb = if pb.is_absolute() { pb } else { root.join(pb) };
-            if pb.is_dir() {
-                collect_rs(&pb, &mut files);
-            } else if pb.is_file() {
-                files.push(pb);
-            }
+/// 校验用户显式给的路径。**不存在的路径必须报错**，不能默默扫到 0 个 ——
+/// 否则打错一个字得到的是"这个项目没有泛型热点"，那是个会被当成结论的假数据。
+///
+/// 顺带接受 Git Bash 的 `/d/...` 形态（Windows 上它不是绝对路径，会拼错）。
+pub fn check_paths(paths: &[String], root: &Path) -> Result<(), String> {
+    let mut bad: Vec<String> = Vec::new();
+    for r in crate::util::scan_roots(paths, root) {
+        if !r.exists() {
+            bad.push(r.display().to_string());
         }
     }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "路径不存在：{}\n  提示：给的是目录或单个 .rs 文件都行；相对路径按 {} 解析。",
+        bad.join("\n            "),
+        root.display()
+    ))
+}
+
+/// 按扫描范围收集 `.rs` 文件。`scan_paths`（扫描）与 `rs_files`（还原）共用同一套
+/// "扫哪些文件"的逻辑 —— 两边一旦不一致，`undo` 就会漏还原一部分文件。
+fn collect_from_roots(paths: &[String], root: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for r in crate::util::scan_roots(paths, root) {
+        if r.is_dir() {
+            collect_rs(&r, &mut files);
+        } else {
+            files.push(r);
+        }
+    }
+    files.sort();
+    files.dedup();
+    files
+}
+
+pub fn scan_paths(paths: &[String], root: &Path) -> Result<Vec<Candidate>, String> {
+    let files = collect_from_roots(paths, root);
     let mut out = Vec::new();
     for f in files {
         out.extend(scan_file(&f)?);
@@ -899,5 +952,62 @@ fn helper() -> u64 {
             // 以泛型签名的收尾大括号结束
             assert!(r.ends_with('}'), "render() 应以收尾大括号结束：{r:?}");
         }
+    }
+
+    /// 🔴 真实项目回归：中文注释/中文字符串把扫描器搞 panic 过。
+    /// `item_start` 里用 `(b as char).is_alphanumeric()` 判断标识符时，
+    /// `0xBA as char` 是 `'º'`（**是**字母），而 `示` = `E7 A4 BA` ——
+    /// 于是回溯一头扎进多字节字符中间，`&text[k..end]` 直接
+    /// `not a char boundary` panic。修法是全部改成 ASCII 判断。
+    #[test]
+    fn chinese_source_does_not_panic_the_scanner() {
+        // 属性 + `pub` 前缀 + 中文注释 + 中文字符串字面量，把 `item_start`
+        // 往回走的每条分支都踩一遍（`pub(crate)` / `#[attr]` / 中文前置字符）
+        let src = "\
+// 这一行是中文注释：表示、中间、电话
+pub(crate) fn 前面的中文() {}
+
+/// 文档注释：中文说明，含「表示」与「中间」
+#[inline]
+#[must_use]
+pub fn drive<T: Work>(t: &T, n: u64) -> u64 {
+    // 函数体里也有中文：信号、显示
+    let _ = \"中文字符串字面量 表示\";
+    t.step(n)
+}
+";
+        let cands = scan_text(src, Path::new("中文.rs"));
+        assert_eq!(cands.len(), 1, "应找到 1 个泛型函数 drive");
+        assert_eq!(cands[0].name, "drive");
+        assert!(cands[0].ok(), "drive 应可改写：{:?}", cands[0].reject);
+        // 整个 item 头（含属性和 pub）都要被覆盖 —— 注意属性在 sig 里是保留的
+        assert!(
+            cands[0].sig.contains("#[inline]") && cands[0].sig.contains("pub fn drive"),
+            "sig={}",
+            cands[0].sig
+        );
+        // 往返也不能崩
+        let rendered = cands[0].render(Switch::DebugAssertions);
+        let rewritten =
+            format!("{}{}{}", &src[..cands[0].start], rendered.trim_end(), &src[cands[0].end..]);
+        let (back, n) = revert(&rewritten);
+        assert_eq!(n, 1);
+        assert_eq!(back, src, "中文源码往返必须逐字节相同");
+    }
+
+    /// 中文标识符自己也是多字节：必须能识别出这个函数（不静默漏掉），
+    /// 但**显式拒绝**改写（不靠"恰好解析对了"），且全程不 panic。
+    #[test]
+    fn non_ascii_identifiers_are_reported_not_misparsed() {
+        let src = "pub fn 处理<T: Work>(t: &T, n: u64) -> u64 {\n    t.step(n)\n}\n";
+        let cands = scan_text(src, Path::new("cn.rs"));
+        assert_eq!(cands.len(), 1, "应能找到这个函数，而不是静默漏掉");
+        assert_eq!(cands[0].name, "处理", "名字要完整取到，不能只取到后半截");
+        assert!(!cands[0].ok(), "非 ASCII 名应被拒绝");
+        assert!(
+            cands[0].reject.as_deref().unwrap_or("").contains("非 ASCII"),
+            "拒绝原因要说明是名字的问题：{:?}",
+            cands[0].reject
+        );
     }
 }

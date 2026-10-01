@@ -170,6 +170,107 @@ cargo xmake undo > /tmp/xmk-undo3.log 2>&1
 final_md5="$(md5sum src/main.rs | cut -d' ' -f1)"
 if [ "$final_md5" = "$before_md5" ]; then ok "收尾 undo 后源码仍逐字节一致"; else bad "收尾 undo 后源码被改了"; fi
 
+# ══════════════════════════════════════════════════════════════════════
+# 9. workspace + 中文源码 —— 这一节是"真实项目"的最小复现
+#
+# 上面 1~8 步的夹具全是**单 crate + 纯 ASCII**，而真实项目是
+#   workspace + 中文注释 + 多层模块。
+# 这两个差异恰好藏着 5 个只有真实项目才暴露的 bug：
+#   * 中文注释里的续字节 0xBA 被 `as char` 当成字母 'º' → 扫描器 panic
+#   * workspace 根下没有 src/ → 默认扫到 0 个泛型函数
+#   * mono-stats 报告写到 workspace 根 → 在 crate 目录里找不到
+#   * 打错路径被静默丢弃 → "0 个"看着像结论
+# 所以这一节不能省。
+# ══════════════════════════════════════════════════════════════════════
+step "9. workspace + 中文源码（真实项目的最小复现）"
+cd "$WORK" || exit 1
+rm -rf ws && mkdir -p ws/member-a/src ws/member-b/src
+cat > ws/Cargo.toml <<'TOML'
+[workspace]
+members = ["member-a", "member-b"]
+resolver = "2"
+TOML
+cat > ws/member-a/Cargo.toml <<'TOML'
+[package]
+name = "member-a"
+version = "0.1.0"
+edition = "2021"
+TOML
+cat > ws/member-b/Cargo.toml <<'TOML'
+[package]
+name = "member-b"
+version = "0.1.0"
+edition = "2021"
+TOML
+# 关键点：**中文注释** + pub(crate) + 属性（把 item_start 的回溯分支全踩一遍）
+cat > ws/member-a/src/lib.rs <<'RS'
+//! 这一行是中文注释：表示、中间、电话
+pub trait Work {
+    fn step(&self, x: u64) -> u64;
+}
+
+/// 文档注释：中文说明，含「表示」与「中间」
+#[inline]
+#[must_use]
+pub fn drive<T: Work>(t: &T, n: u64) -> u64 {
+    // 函数体里也有中文：信号、显示
+    let _ = "中文字符串字面量 表示";
+    t.step(n)
+}
+RS
+cat > ws/member-b/src/lib.rs <<'RS'
+//! 另一个成员，也有中文注释
+pub fn helper<T: std::fmt::Debug>(v: T) -> String {
+    format!("{v:?}")
+}
+RS
+
+cd ws || exit 1
+# 9a. workspace 根不给路径 → 必须扫到**所有成员**的泛型函数（不是 0 个）
+ws_out="$(cargo xmake dynify 2>&1)"
+if echo "$ws_out" | grep -q "扫描 0 个泛型函数"; then
+  bad "workspace 根扫到 0 个（应该扫所有成员）—— 这正是真实项目上的头号 bug"
+else
+  n_ws="$(echo "$ws_out" | grep -o '扫描 [0-9]*' | grep -o '[0-9]*' | head -1)"
+  if [ "${n_ws:-0}" -ge 2 ]; then ok "workspace 根扫到 ${n_ws} 个泛型函数（含两个成员）"; else bad "只扫到 ${n_ws} 个，应为 2"; fi
+fi
+# 9b. 中文注释不能让扫描器 panic
+if echo "$ws_out" | grep -qi "not a char boundary\|panicked"; then
+  bad "中文注释把扫描器搞崩了"
+else
+  ok "中文注释/中文字符串没有让扫描器 panic"
+fi
+# 9c. 反而应该能改到（drive 是单约束 &T，本来就可改）
+if echo "$ws_out" | grep -q "可改 drive\|可改.*drive"; then ok "中文源码里的 drive 被正确识别为可改"; else bad "没识别出 drive"; echo "$ws_out" | head -20; fi
+if echo "$ws_out" | grep -q "中文字符串\|表示"; then bad "中文出现在扫描结果里，说明解析错位"; else ok "扫描结果里没有混入中文字符"; fi
+
+# 9d. Git Bash 风格路径 /d/... 必须被认出，不能静默变 0
+abs_ws="$(cd "$WORK/ws/member-a/src" && pwd -W 2>/dev/null || echo "$WORK/ws/member-a/src")"
+gb_out="$(cargo xmake dynify "$(echo "$abs_ws" | sed 's|^\([A-Za-z]\):|/\L\1|; s|\\|/|g')" 2>&1)"
+if echo "$gb_out" | grep -q "扫描 0 个泛型函数"; then bad "Git Bash 风格路径被当成了相对路径"; else ok "Git Bash 风格路径 /d/... 被正确解析"; fi
+
+# 9e. 打错的路径必须报错，不能静默 0
+if cargo xmake dynify member-a/srx > /tmp/xmk-badpath.log 2>&1; then
+  bad "打错的路径没报错（静默退化成 0 个）"
+else
+  if grep -q "路径不存在" /tmp/xmk-badpath.log; then ok "打错的路径明确报错"; else bad "报错了但原因不清楚"; cat /tmp/xmk-badpath.log; fi
+fi
+
+# 9f. audit 在 workspace 上必须能读到报告（报告会落在 workspace 根）
+cd "$WORK/ws" || exit 1
+audit_out="$(timeout 600 cargo xmake audit --xmk-top=5 2>&1)"
+if echo "$audit_out" | grep -q "没读到 mono-stats 报告"; then
+  bad "workspace 上读不到 mono-stats 报告（报告落在 workspace 根，工具没去那找）"
+else
+  ok "workspace 上 audit 读到了 mono-stats 报告"
+fi
+# 9g. 报告读完后不留残骸
+if [ -d "$WORK/ws/human" ] || [ -d "$WORK/ws/member-a/human" ]; then
+  bad "audit 留下了 human/ 目录没清"
+else
+  ok "audit 把自己生成的 human/ 报告清理干净了"
+fi
+
 echo
 echo "================ 结果：${pass} 通过 / ${fail} 失败 ================"
 if [ -n "${KEEP_SMOKE:-}" ]; then
