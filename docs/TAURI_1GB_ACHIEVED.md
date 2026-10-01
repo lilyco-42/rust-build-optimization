@@ -70,6 +70,14 @@ debug-assertions = false
 
 ### 2. `src-tauri/.cargo/config.toml`
 
+> ⚠️ **后续修正（2026-10-01）**：下面这段里的 `rustc-wrapper = "sccache"` **不要再照抄**。
+> 它会让含 `web-sys` 的项目 `cargo build --workspace` 直接失败
+> （`os error 206 文件名或扩展名太长`：web-sys 命令行 ~40,000 字符 > Windows
+> `CreateProcess` 的 32,767 上限）。正确用法是 opt-in：
+> `RUSTC_WRAPPER=sccache cargo check`。详见
+> [`02-lilyco-measurements.md`](02-lilyco-measurements.md) 与 [`03-build-speed.md`](03-build-speed.md)。
+> **权威版本看 [`configs/dot-cargo-config.toml`](../configs/dot-cargo-config.toml)。**
+
 ```toml
 # 🔴 决定性的一刀：省 179 MB
 # /DEBUG:NONE 让 MSVC 链接器不生成 PDB
@@ -77,6 +85,7 @@ debug-assertions = false
 rustflags = ["-C", "link-args=/DEBUG:NONE"]
 
 # sccache：换分支/clean 后重建提速（113s → 61.5s）
+# ⛔ 已废弃的写法，见上方修正说明 —— 不要照抄这行
 [build]
 rustc-wrapper = "sccache"
 ```

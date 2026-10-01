@@ -39,19 +39,30 @@ overflow-checks = false
 debug-assertions = false
 '''.format(stamp=STAMP)
 
-# /DEBUG:NONE 让 MSVC 不生成 PDB（实测省 179 MB）；sccache 让冷重建 113s -> 61.5s
+# /DEBUG:NONE 让 MSVC 不生成 PDB（实测省 179 MB）
+# ⛔ 不默认写 sccache：它会让含 web-sys 的项目 `cargo build --workspace` 直接失败
+#    （命令行 ~40,000 字符 > Windows CreateProcess 32,767 上限，os error 206）。
+#    需要时用 `RUSTC_WRAPPER=sccache cargo check` 按需开。
 CARGO_CONFIG = '''# 体积 / 速度优化 —— 生成于 {stamp}
 #
 # /DEBUG:NONE  : MSVC 链接器不生成 PDB（实测 target 省 179 MB）
 #                代价：无法用 WinDbg / VS 断点调试；panic 回溯不受影响
 #                需要断点调试时，注释掉下面这行即可
-# rustc-wrapper: sccache，换分支 / cargo clean 后重建实测 113s -> 61.5s
+#
+# ⛔ 这里刻意不启用 sccache。
+#    它会让「含 web-sys 的项目」在 `cargo build --workspace` 时直接失败：
+#      sccache: caused by: 文件名或扩展名太长。 (os error 206)
+#    根因：web-sys 的 rustc 命令行约 40,000 字符（rustc 1.80+ 把每个 feature 都塞进
+#          --check-cfg），超过 Windows CreateProcess 的 32,767 上限，
+#          而 sccache 作为 rustc-wrapper 正是发起该调用的一方。
+#    需要时按需开（只在冷重建 / CI 有意义）：
+#      RUSTC_WRAPPER=sccache cargo check
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-args=/DEBUG:NONE"]
 
 [build]
-rustc-wrapper = "sccache"
+# rustc-wrapper = "sccache"
 '''.format(stamp=STAMP)
 
 

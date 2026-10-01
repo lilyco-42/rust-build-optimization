@@ -112,11 +112,20 @@ debug-assertions = false
 
 ### 第 2 层 —— sccache（换分支/clean 后重建提速）
 
+> ⚠️ **后续修正（2026-10-01）**：本节建议「写进 `~/.cargo/config.toml` 全局生效」
+> **已被推翻**。实测在 865 包真实工作区上，它会让 `cargo build --workspace` 直接失败：
+> `sccache: caused by: 文件名或扩展名太长。 (os error 206)` —— web-sys 的 rustc
+> 命令行约 40,000 字符，超过 Windows `CreateProcess` 的 32,767 上限，而 sccache
+> 作为 wrapper 正是发起该调用的一方。**正确做法是 opt-in，不进任何 config 文件**：
+> `RUSTC_WRAPPER=sccache cargo check`。详见
+> [`02-lilyco-measurements.md`](02-lilyco-measurements.md) 与 [`03-build-speed.md`](03-build-speed.md)。
+
 你机器上 `sccache 0.18.0` **已经装了但从未使用**（统计显示 0 次请求）。
 
-启用方式，写进 `~/.cargo/config.toml`（这个是全局的，对所有项目生效，且 `[build]`/`[env]` 段在这里是合法的）：
+~~启用方式，写进 `~/.cargo/config.toml`（这个是全局的，对所有项目生效，且 `[build]`/`[env]` 段在这里是合法的）：~~
 
 ```toml
+# ⛔ 已废弃：不要这样做（见上方修正说明）
 [build]
 rustc-wrapper = "sccache"
 ```
@@ -227,7 +236,7 @@ C 的 target 反而比 B 大（1,522 vs 1,511），因为 `lto="thin"` 的中间
 | 1 | `Cargo.toml` 加 `[profile.dev]` + `[profile.dev.package."*"]` | **省 2.6 GB/项目** | 5 分钟，一次性 |
 | 2 | `sccache --set-max-cache-size 2G` | 防 C 盘被缓存吃满（当前上限 10 GB） | 10 秒 |
 | 3 | 从 `~/.cargo/config.toml` 删掉那个**无效的** `[profile.release]`，写进项目 | 避免误判 | 1 分钟 |
-| 4 | `~/.cargo/config.toml` 加 `[build] rustc-wrapper = "sccache"` | 冷重建 113s → 61.5s | 1 分钟 |
+| 4 | ⛔ ~~`~/.cargo/config.toml` 加 `[build] rustc-wrapper = "sccache"`~~ **已废弃**（会崩 web-sys）。改用按需 `RUSTC_WRAPPER=sccache cargo check` | 冷重建 113s → 61.5s | 1 分钟 |
 | 5 | `cargo cache --autoclean` | 回收 registry 冗余（当前 3 GB） | 2 分钟 |
 | 6 | `cargo clean` 掉不再维护的项目 | 按项目回收 GB 级 | 看项目数 |
 | 7 | 把 `target/` 挪到空间大的盘（`CARGO_TARGET_DIR`） | 缓解 C 盘压力 | 需权衡 |

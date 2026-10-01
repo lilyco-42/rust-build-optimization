@@ -8,6 +8,24 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-args=/DEBUG:NONE"]
 
-# sccache：换分支/cargo clean 后重建提速（实测 113s -> 61.5s）
 [build]
-rustc-wrapper = "sccache"
+# ⛔ 不要把 sccache 开在这里！
+#
+# 实测（2026-10-01，865 包真实工作区）：
+#     sccache: encountered fatal error
+#     sccache: caused by: 文件名或扩展名太长。 (os error 206)
+#     error: could not compile `web-sys` (lib)
+#
+# 根因：web-sys 的 rustc 命令行约 40,000 字符（rustc 1.80+ 把每个 feature 都塞进
+#       --check-cfg），超过 Windows CreateProcess 的 32,767 上限。sccache 作为
+#       rustc-wrapper 是发起 CreateProcess 的一方，所以挂的是它。
+#       最小 Tauri 探针不含 web-sys，复现不了这个坑。
+#
+# 正确用法：按需 opt-in，只在冷重建 / CI 里开
+#     RUSTC_WRAPPER=sccache cargo check
+#
+# 理由：sccache 收益上限 1.84×（113.1s -> 61.5s），且命中率只有 57.4%
+#       （build.rs 产物 + proc-macro 那 43% 永不命中）。日常增量循环
+#       （check 2.8s / build 4.9s）完全用不到它。
+#       为这点收益换一个「构建直接失败」的陷阱，不划算。
+# rustc-wrapper = "sccache"
