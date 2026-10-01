@@ -5,14 +5,14 @@
 //!   1. 我们自己的开关统一带 `--xmk-` 前缀，从 argv 的**任意位置**摘掉，
 //!      绝不会误吞 cargo 的 flag；
 //!   2. 摘完之后剩下的就是纯粹的 `cargo <sub> <args...>`，原样转发；
-//!   3. 只有 `setup/undo/doctor/audit/dynify/selftest` 这些 cargo 没有的
+//!   3. 只有 `setup/undo/doctor/audit/dynify/slim/selftest` 这些 cargo 没有的
 //!      子命令才由我们自己处理，而且它们可以额外接受不带前缀的短开关。
 
 use crate::plan::Tier;
 use std::path::PathBuf;
 
 pub const OUR_COMMANDS: &[&str] = &[
-    "setup", "undo", "doctor", "audit", "dynify", "selftest", "help", "version",
+    "setup", "undo", "doctor", "audit", "dynify", "slim", "selftest", "help", "version",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +60,10 @@ pub struct Opts {
     pub top: usize,
     pub mode: AuditMode,
     pub profile: Option<String>,
+    // slim —— 减编译量（推荐 default-members）
+    pub slim_apply: bool,
+    pub slim_auto: bool,
+    pub slim_drop: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -104,6 +108,9 @@ impl Default for Opts {
             top: 20,
             mode: AuditMode::Auto,
             profile: None,
+            slim_apply: false,
+            slim_auto: false,
+            slim_drop: Vec::new(),
         }
     }
 }
@@ -245,6 +252,25 @@ fn strip_bare(args: &[String], opts: &mut Opts, cmd: &str, errs: &mut Vec<String
             }
             ("audit", "--package") | ("audit", "-p") => {
                 opts.package = take_value(args, &mut i, inline);
+                true
+            }
+            ("slim", "--apply") => {
+                opts.slim_apply = true;
+                true
+            }
+            ("slim", "--auto") => {
+                opts.slim_auto = true;
+                true
+            }
+            ("slim", "--drop") => {
+                if let Some(v) = take_value(args, &mut i, inline) {
+                    opts.slim_drop = v
+                        .split(',')
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+                }
                 true
             }
             _ => false,
