@@ -1,0 +1,73 @@
+name: Release
+
+# 打 `v*` tag（或手动触发）就出预编译二进制 + GitHub Release。
+#
+# 这是 `cargo binstall cargo-xmake` 能装上东西的前提：binstall **不是从源码编**，
+# 而是来 GitHub Release 里找名字里带目标三元组的压缩包。
+#
+# 命名与打包约定（照 binstall 的默认识别来，所以不用写 [package.metadata.binstall]）：
+#   * 文件名里必须带 target triple —— cargo-xmake-<triple>.{tar.gz,zip}
+#   * 压缩包里二进制放在**根目录**，就叫 cargo-xmake(.exe)
+#
+# ⚠️ 两个前置条件（本仓库目前都还没满足，见 README「安装」一节）：
+#   1. 仓库要公开 —— 私有的 Release 资产匿名下不到，binstall 会失败；
+#   2. crate 要发到 crates.io（Cargo.toml 现在是 publish = false）—
+#      binstall 先查 crates.io 拿版本和仓库地址，再回落 GitHub Release。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path cargo-xmake/Cargo.toml
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp cargo-xmake/target/${{ matrix.target }}/release/cargo-xmake dist/
+          tar czf cargo-xmake-${{ matrix.target }}.tar.gz -C dist cargo-xmake
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item cargo-xmake/target/${{ matrix.target }}/release/cargo-xmake.exe dist/
+          Compress-Archive -Path dist/cargo-xmake.exe -DestinationPath cargo-xmake-${{ matrix.target }}.zip
+
+      # 用通配而不是写死文件名：unix 上只有 .tar.gz、windows 上只有 .zip，
+      # 写死的话另一半模式匹配不到会报错。
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cargo-xmake-*.tar.gz
+            cargo-xmake-*.zip
+          generate_release_notes: true
