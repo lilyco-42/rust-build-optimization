@@ -19,6 +19,7 @@
 直接看 [`docs/03-build-speed.md`](docs/03-build-speed.md)。核心：**速度和体积的杠杆几乎不重叠**，
 而本文档里的刀（`/DEBUG:NONE`、`debug = false`、去 `staticlib`）**对速度零收益**。
 速度专属的杠杆只有三个：`default-members`、用 `cargo check` 代替 `cargo build`、留 `incremental = true`。
+想要一张「编译时间都花在哪了 / 各杠杆各占多少」的总图，看 [`docs/07-compile-time-breakdown.md`](docs/07-compile-time-breakdown.md)（含 mermaid 占比饼图）。
 
 ### 如果你还想再快一步 / 想跟 C(xmake) 比
 
@@ -148,6 +149,7 @@ CI **完全不受影响**（它只用 `-p <crate>`）。真实项目实测见 [`
 │   ├── 05-toolchain-cards.md             ★★ 还想再快？lld/并行前端/cranelift 实测 + 两个测量陷阱
 │   ├── 04-rust-vs-xmake-speed.md         ★ Rust vs C(xmake) 三层对标：到底做到了没有
 │   ├── 06-cargo-xmake.md                 ★★ cargo-xmake 的设计决策与全部实测
+│   ├── 07-compile-time-breakdown.md        ★ 编译时间解剖 + 各报告占比总图（mermaid 饼图）
 │   ├── 00-experiment-log.md              ★ 全部实验台账 E1~E11（再看这个）
 │   ├── 02-lilyco-measurements.md          在真实 865 包工作区上的实测（含三个踩坑）
 │   ├── XMAKE_VS_RUST_PIPELINE.md          R1 对标 xmake：汇编层 + 全流程
