@@ -555,7 +555,7 @@ pub fn cmd_slim(root: &Path, opts: &Opts, style: &Style) -> Option<i32> {
         println!(
             "  {} 加 `--apply` 才会改 {}",
             style.dim("只读："),
-            style.bold(util::pretty_path(&manifest))
+            style.bold(&util::pretty_path(&manifest))
         );
         return Some(0);
     }
@@ -566,7 +566,7 @@ pub fn cmd_slim(root: &Path, opts: &Opts, style: &Style) -> Option<i32> {
             println!(
                 "{} 已写入 {}",
                 style.bold("已落盘："),
-                style.bold(util::pretty_path(&manifest))
+                style.bold(&util::pretty_path(&manifest))
             );
             println!(
                 "  {} 裸命令会走 default-members；CI 用 `-p <crate>` 本就显式指定，不受影响。",
