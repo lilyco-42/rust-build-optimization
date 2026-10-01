@@ -12,11 +12,32 @@
 
 ---
 
+## 安装
+
+```bash
+# 推荐：下预编译二进制（3 秒，不用编）
+cargo binstall cargo-xmake
+
+# 或者：从 crates.io 源码装 —— 零依赖，也就 1 秒
+cargo install cargo-xmake
+
+# 或者：从本仓库源码装
+cargo install --path cargo-xmake
+```
+
+> `cargo binstall` 能成，靠两件事同时满足：
+> ① crate 已发到 [crates.io](https://crates.io/crates/cargo-xmake)；
+> ② 每个版本都有带目标三元组的 GitHub Release 资产（打 `v*` tag 时由
+> `.github/workflows/release.yml` 自动产出，含 Windows/Linux/macOS 四个 target）。
+> 缺任何一样，binstall 都会回落成源码安装或直接失败。
+
+---
+
 ## 快速开始
 
 ```bash
 # 1. 安装（得到 cargo-xmake.exe，于是 `cargo xmake` 就能用了）
-cargo install --path cargo-xmake
+cargo binstall cargo-xmake
 
 # 2. 在项目里写入 xmake 档剖面设置（只碰 .cargo/config.toml）
 cargo xmake setup
