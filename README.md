@@ -20,6 +20,15 @@
 而本文档里的刀（`/DEBUG:NONE`、`debug = false`、去 `staticlib`）**对速度零收益**。
 速度专属的杠杆只有三个：`default-members`、用 `cargo check` 代替 `cargo build`、留 `incremental = true`。
 
+### 如果你还想再快一步 / 想跟 C(xmake) 比
+
+- [`docs/05-toolchain-cards.md`](docs/05-toolchain-cards.md) —— lld / 并行前端 / **cranelift** 三张牌的实测。
+  **两台无效，cranelift 有条件可用（冷 build −31%），但它把冷 check 拖慢了 9 秒。**
+  另含两个测量陷阱：跨工具链 target 目录污染、硬链接体积重复计数。
+- [`docs/04-rust-vs-xmake-speed.md`](docs/04-rust-vs-xmake-speed.md) —— Rust vs C/xmake 三层对标。
+  **可比规模上 Rust 全面超越**（冷 0.36×、增量 0.59×、no-op 0.29×），
+  但真实项目的绝对冷构建赢不了 —— 那是**编译量**的差异，不是**编译器速度**的差异。
+
 ### 如果你只想抄配置
 
 | 场景 | 看这里 |
@@ -66,6 +75,19 @@
    lilyco 实测 `build` 冷 90.1 s vs 95.3 s、`target/` 935.3 vs 948.3 MB。
    （`check` 那 2.2 s 差是噪声 —— `check` 不跑 codegen。）**别去"修"它。**
 
+### 三张"再快一点"的牌（实测，两台无效）
+
+8. **lld 链接器 / 并行前端都没用。** lld 让 `build` 从 93.9 → 95.7 s（噪声），
+   并行前端 −1.4 s（噪声）——前者分母太小（91 s 里链接只占几秒），
+   后者 cargo 本来就跨 crate 并行了。
+
+9. **cranelift 是唯一有肉的：冷 `build` 91.5 → 63.5 s（−31%）、增量 `build` −17%。**
+   但 **冷 `check` 反而 +9.3 s（变慢 20%）**，`target/` +7%，且**不支持 fat LTO**（dev-only）。
+   ⛔ 千万别写进 `Cargo.toml` —— **stable cargo 会直接报 manifest 解析失败，CI 全挂**。
+
+10. **`target/` 的真实值要比"朴素累加"低 6.8%** —— cargo 会把 rlib 以**硬链接**放到
+    `target/debug/` 顶层，遍历累加会把同一份算两遍。lilyco：935.3 → **871.6 MB**。
+
 ---
 
 ### 在真实工作区上的第一刀：`default-members`
@@ -94,7 +116,9 @@ CI **完全不受影响**（它只用 `-p <crate>`）。真实项目实测见 [`
 ├── docs/
 │   ├── 01-methodology.md                 ★★ 优化思路：分层决策（先看这个）
 │   ├── 03-build-speed.md                 ★★ 只讲「构建速度」怎么解（痛点在这里就看这个）
-│   ├── 00-experiment-log.md              ★ 全部实验台账 E1~E9（再看这个）
+│   ├── 05-toolchain-cards.md             ★★ 还想再快？lld/并行前端/cranelift 实测 + 两个测量陷阱
+│   ├── 04-rust-vs-xmake-speed.md         ★ Rust vs C(xmake) 三层对标：到底做到了没有
+│   ├── 00-experiment-log.md              ★ 全部实验台账 E1~E11（再看这个）
 │   ├── 02-lilyco-measurements.md          在真实 865 包工作区上的实测（含三个踩坑）
 │   ├── XMAKE_VS_RUST_PIPELINE.md          R1 对标 xmake：汇编层 + 全流程
 │   ├── TAURI_DEV_EFFICIENCY_PLAN.md       R2 Tauri 开发效率方案
@@ -169,8 +193,8 @@ find target -name "*.pdb"   -printf "%s\n" | awk '{s+=$1} END {printf "pdb:   %.
   保留的：`dbg!()` 输出（`file:line` 是编译期字面量，不受影响）、`println!`、panic 回溯的函数名。
 - **需要调试时**：`debug = "line-tables-only"` 并注释掉 `/DEBUG:NONE`，体积回到约 1.13 GB。
 - **Tauri 探针的 953 MB 是"最小项目"的数字**；真实项目请以实测为准 ——
-  lilyco（24 成员 / 865 包）的 19 成员日常档实测 **935 MB**，
-  已在真实工作区验证过（见 [`docs/02-lilyco-measurements.md`](docs/02-lilyco-measurements.md)）。
+  lilyco（24 成员 / 865 包）的 19 成员日常档实测 **871.6 MB**（硬链接去重后；
+  朴素累加口径 935.3 MB），已在真实工作区验证过（见 [`docs/02-lilyco-measurements.md`](docs/02-lilyco-measurements.md)）。
   依赖数量是主导因素，业务代码影响很小。
 
 ---

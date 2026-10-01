@@ -7,7 +7,12 @@
 
 ## 一句话结论
 
-**日常内环实测 `cargo check` 2.8s / `cargo build` 4.9s，`target/` 934.7 MB。**
+**日常内环实测 `cargo check` 2.8s / `cargo build` 4.9s，`target/` 871.6 MB。**
+
+> ⚠️ **口径修正（2026-10-01 晚）**：本文初版写的 `934.7 / 935.3 MB` 是**朴素累加**口径 ——
+> 旧布局下 cargo 会把 `deps/` 的产物以**硬链接**放到 `target/debug/` 顶层，
+> 按文件大小累加会把同一份数据算两遍。用 `(st_dev, st_ino)` 去重后真实值是 **871.6 MB**
+> （虚高 63.7 MB / 6.8%）。详见 [`05-toolchain-cards.md`](05-toolchain-cards.md) 第三节。
 加了 `default-members` 后，日常只编 19 个成员、252 个 crate —— 而不是全部 24 个成员、481 个 crate。
 
 ---
@@ -40,7 +45,9 @@
 > `cargo check` 增量，check 的 rmeta 已被清掉，于是测出 16.1s 的假值。
 > **两种 profile 的产物不共享，测增量要各自预热。**
 
-## 三、`target/` 构成（934.7 MB）
+## 三、`target/` 构成（934.7 MB 朴素口径 / **871.6 MB 去重后**）
+
+> ⚠️ 下表所有数字都是**朴素累加**口径，含硬链接重复计数，真实值约低 6.8%。比例关系仍然有效。
 
 | 项 | 体积 | 说明 |
 |---|---|---|
@@ -53,7 +60,7 @@
 | —— 其中 `.lib` | 6.3 MB | 只剩这么点 → `staticlib`/`cdylib` 已去干净 |
 | —— 其中 `.pdb` | **0** | ✅ `/DEBUG:NONE` 生效 |
 
-**硬地板 = rlib 282.7 + rmeta 187.3 = 470 MB。**
+**硬地板 = rlib 282.7 + rmeta 187.3 = 470 MB（朴素口径）。**
 
 `incremental/` 占 325 MB 是三个项目里最大的（Tauri 探针只有 62 MB）——
 因为 lilyco 有 19 个成员，每个都在产生增量产物。
@@ -119,7 +126,7 @@ cargo build -p lilyco-binfmt --bin lbin
 
 | 变体 | `check` 冷 | `build` 冷 | `target/` |
 |---|---|---|---|
-| A `codegen-units = 16`（部署值） | 48.2 s | **90.1 s** | **935.3 MB** |
+| A `codegen-units = 16`（部署值） | 48.2 s | **90.1 s** | **935.3 MB**（朴素口径） |
 | B `codegen-units = 256`（cargo 默认） | 46.0 s | 95.3 s | 948.3 MB |
 
 **怀疑被证伪，16 更优，保留。** 详见 [`03-build-speed.md`](03-build-speed.md)。
@@ -133,7 +140,7 @@ cd D:/Code/lilyco
 
 cargo clean && cargo check     # ~48s
 cargo clean && cargo build     # ~90s
-du -sm target                  # 935 MB
+du -sm target                  # 935 MB（朴素）/ 872 MB（硬链接去重后）
 
 # 增量（注意先各自预热！）
 #   改一行 lilyco-core/src/lib.rs 后：
@@ -156,3 +163,7 @@ python _cgu_test.py            # 约 5 分钟，结果写 _cgu.json
 本文只记录**测量事实**。要把速度作为目标去优化，见
 [`03-build-speed.md`](03-build-speed.md) —— 那里区分了**内环速度**与**冷构建速度**，
 并列出哪些刀对速度**零收益**（`/DEBUG:NONE`、`debug = false`、去掉 `staticlib`…）。
+
+还想再快一步的话，[`05-toolchain-cards.md`](05-toolchain-cards.md) 记录了
+lld / 并行前端 / **cranelift** 三张牌的实测结果（两台无效、cranelift 有条件可用），
+以及本轮踩到的**跨工具链 target 目录污染**与**硬链接体积重复计数**两个测量陷阱。

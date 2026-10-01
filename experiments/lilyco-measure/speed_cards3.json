@@ -1,0 +1,40 @@
+[
+  {
+    "label": "A stable 现行配置",
+    "cold_check_s": 45.5,
+    "cold_build_s": 63.2,
+    "check_inc": [
+      2.69,
+      2.93,
+      3.19
+    ],
+    "check_inc_median": 2.93,
+    "build_inc": [
+      5.1,
+      6.12,
+      5.48
+    ],
+    "build_inc_median": 5.48,
+    "target_naive_mb": 1566.2,
+    "target_unique_mb": 1433.9
+  },
+  {
+    "label": "E nightly + cranelift",
+    "cold_check_s": 52.0,
+    "cold_build_s": 59.1,
+    "check_inc": [
+      5.34,
+      4.23,
+      4.22
+    ],
+    "check_inc_median": 4.23,
+    "build_inc": [
+      8.14,
+      6.92,
+      7.25
+    ],
+    "build_inc_median": 7.25,
+    "target_naive_mb": 1433.1,
+    "target_unique_mb": 1154.7
+  }
+]

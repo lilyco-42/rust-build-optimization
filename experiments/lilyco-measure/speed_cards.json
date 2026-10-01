@@ -1,0 +1,32 @@
+[
+  {
+    "variant": "A 现行配置（stable 基准）",
+    "check_cold_s": 47.2,
+    "build_cold_s": 93.9,
+    "target_mb": 935.3
+  },
+  {
+    "variant": "B stable + lld-link",
+    "check_cold_s": 47.8,
+    "build_cold_s": 95.7,
+    "target_mb": 935.0
+  },
+  {
+    "variant": "C nightly 基准（对照）",
+    "check_cold_s": 49.5,
+    "build_cold_s": 90.2,
+    "target_mb": 697.9
+  },
+  {
+    "variant": "D nightly + 并行前端 x8",
+    "check_cold_s": null,
+    "build_cold_s": null,
+    "target_mb": 0.0
+  },
+  {
+    "variant": "E nightly + cranelift 后端",
+    "check_cold_s": 37.5,
+    "build_cold_s": 46.8,
+    "target_mb": 1209.3
+  }
+]

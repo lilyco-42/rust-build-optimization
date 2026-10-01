@@ -1,0 +1,42 @@
+[
+  {
+    "label": "C2 nightly 对照",
+    "check_s": 45.4,
+    "check_compiling_lines": 64,
+    "check_checking_lines": 188
+  },
+  {
+    "label": "D2 nightly + 并行前端8",
+    "check_s": 44.0,
+    "check_compiling_lines": 63,
+    "check_checking_lines": 189
+  },
+  {
+    "label": "C3 nightly 基准",
+    "build_s": 82.7,
+    "deps": 0.0,
+    "incremental": 277.9,
+    "build": 374.5,
+    "total": 697.9,
+    "rlib": 96.4,
+    "rmeta": 193.2,
+    "pdb": 0.0,
+    "obj": 0.3,
+    "lib": 6.3,
+    "inc_dirs": 27
+  },
+  {
+    "label": "E2 cranelift",
+    "build_s": 44.3,
+    "deps": 0.0,
+    "incremental": 256.3,
+    "build": 684.3,
+    "total": 1209.3,
+    "rlib": 156.2,
+    "rmeta": 193.2,
+    "pdb": 0.0,
+    "obj": 0.3,
+    "lib": 6.3,
+    "inc_dirs": 27
+  }
+]

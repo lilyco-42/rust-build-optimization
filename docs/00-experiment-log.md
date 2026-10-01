@@ -22,6 +22,8 @@
 | [E7](#e7) | sccache 真实收益 | `_bench_sccache.json` `_sccache_result.json` |
 | [E8](#e8) | 依赖 opt-level 五组标定（终测） | `_bench_opt.json` |
 | [E9](#e9) | lilyco 首次真实测量 · `default-members` · `codegen-units` 单变量 | `_cgu.json` |
+| [E10](#e10) | 四张牌：lld / 并行前端 / cranelift · 两个测量陷阱 | `speed_cards*.json` |
+| [E11](#e11) | Rust vs xmake 实时对标（冷/增量/**no-op** 三层） | `ip-c` `ip-bare` |
 
 ---
 
@@ -270,7 +272,8 @@ CI 逐行确认只用 `-p <crate>`，**不受 `default-members` 影响**。
 | `cargo check` | **48.2 s**（另测 53.6 s） | **2.8 s** |
 | `cargo build` | **90.1 s**（另测 91.1 / 134.3 s） | **4.9 s** |
 
-`target/` **935.3 MB**（`deps` 522.8 + `incremental` 325.1 + `build` 39.1），
+`target/` **871.6 MB**（`deps` 522.8 + `incremental` 325.1 + `build` 39.1，朴素口径 935.3 MB ——
+两者差 63.7 MB 是**硬链接重复计数**，见 [E10](#e10)），
 硬地板 **470 MB**（`rlib` 282.7 + `rmeta` 187.3），`.pdb` = **0**。
 
 ### E9.3 `codegen-units` 单变量（否定结果）
@@ -305,3 +308,112 @@ cargo 对 test profile 强制 unwind，dev 档的 `panic = "abort"` **安全**�
 | `cargo build --workspace` 崩 `os error 206 文件名或扩展名太长` | `web-sys` rustc 命令行 ~40,000 字符 > Windows `CreateProcess` 32,767；sccache 作为 wrapper 发进程 | 从 `.cargo/config.toml` 摘掉 `rustc-wrapper`，改 opt-in |
 | `cargo build --workspace` 报 `resource path 'binaries\lbin-...exe' doesn't exist` | `tauri.conf.json` 声明了 `externalBin`，sidecar 需先构建拷贝 | **不是配置问题**，该命令在真实项目里本就不曾可用 |
 | `cargo check` 增量测出 16.1 s 假值 | check 用 `rmeta`、build 用 `rlib`，两套产物不共享；在 build 冷构建（含 `cargo clean`）之后测 check 增量 | 两种 profile **各自预热**后重测 → 真值 2.8 s（**差 5.7×**） |
+
+---
+
+<a id="e10"></a>
+## E10 · 四张牌：lld / 并行前端 / cranelift
+
+> lilyco（24 成员 / 379 包）· 单变量 · **每个变体独立 `CARGO_TARGET_DIR`**
+> 数据：`experiments/lilyco-measure/speed_cards*.json` · 正文见
+> [`05-toolchain-cards.md`](05-toolchain-cards.md)
+
+### E10.1 定稿结果（第四轮，隔离 target）
+
+| 变体 | 冷 `check` | 冷 `build` | 增量 `check` | 增量 `build` | `target/`(去重) |
+|---|---|---|---|---|---|
+| A stable 现行配置 | 46.5 s | 91.5 s | 2.98 s | 5.74 s | **871.6 MB** |
+| ① lld-link 链接器 | — | 95.7 s | — | — | ≈ 同 |
+| ② 并行前端 `--jobs-frontend=8` | 44.0 s（对照 45.4） | — | — | — | — |
+| ③ **cranelift 后端** | **55.8 s** | **63.5 s** | **2.66 s** | **4.78 s** | 932.3 MB |
+
+**cranelift Δ**：冷 build **−28.0 s（−31%）**、增量 build −0.96 s（−17%）、
+增量 check −0.32 s（−11%）、**冷 check +9.3 s（+20%，变慢）**、target +60.7 MB。
+
+① lld 只加速链接，而 91 s 里 88 s 是 codegen，分母太小 → **无效**。
+② cargo 已跨 crate 并行，crate 内前端并行是边际 → **噪声级**。
+③ cranelift 是唯一有肉的，但把冷 `check` 拖慢了 9 s。
+
+### E10.2 🔴 第一轮测出的是假象（重要方法论）
+
+| 轮次 | target 目录 | A 冷 build | E(cranelift) 冷 build | 差值 |
+|---|---|---|---|---|
+| 第一轮 | **共用** | 93.9 s | 46.8 s | **−47.1 s（−50%）** ← 假 |
+| 第四轮 | **隔离** | 91.5 s | 63.5 s | **−28.0 s（−31%）** ← 真 |
+
+冷 `check` 更离谱：第一轮 −9.7 s（看起来变快），第四轮 **+9.3 s（其实变慢）**，**方向都反了**。
+
+**根因**：stable 1.98 用旧布局（有 `deps/`），
+nightly 1.100 **默认启用新的 build-dir 布局**（没有 `deps/`，产物落在 `build/<crate>/<hash>/out/`）。
+两者共用一个 `target/` 时，nightly 的 `cargo clean` 按新布局清理，**清不掉 stable 留在旧布局里的产物**，
+于是后面跑的变体白捡了前面编译好的 proc-macro / build script。
+
+最小工程验证：
+```
+stable  1.98.1 :  target/debug/deps/layout_probe.exe     ← deps/ 存在
+nightly 1.100  :  target/debug/layout_probe.pdb          ← deps/ 不存在
+```
+
+### E10.3 🔴 体积口径修正：硬链接被算了两次
+
+旧布局下 cargo 把 `deps/` 的产物以**硬链接**放到 `target/debug/` 顶层：
+
+```
+target/debug/deps/liblilyco_core-<hash>.rlib   ← 真身
+target/debug/liblilyco_core.rlib               ← 硬链接，同一份数据
+```
+
+我此前按「遍历文件 + 累加 `st_size`」统计 → **同一份算两遍**。
+
+| 口径 | target/ |
+|---|---|
+| 朴素累加 | 935.3 MB |
+| **`(st_dev, st_ino)` 去重** | **871.6 MB** |
+| 虚高 | **+63.7 MB（+6.8%）** |
+
+（`硬地板 470 MB` 那个数同样是朴素口径。）
+
+### E10.4 cranelift 的启用方式：一个会让 CI 挂掉的坑
+
+⛔ **不要写进 `Cargo.toml`**：stable cargo 1.98.1 **在解析 manifest 阶段硬报错**
+`feature codegen-backend is required ... not stabilized` —— 不是忽略这个键，是**整个 manifest 解析失败**，
+任何用 stable 的人（含 CI）都编不动。`--config` 传入同理（要求 `cargo-features` 声明，也是 manifest 改动）。
+
+✅ **正确用法**（已实测，rustc 命令行里能看到 `codegen-backend=cranelift`）：
+
+```bash
+RUSTFLAGS="-Zcodegen-backend=cranelift -Clink-args=/DEBUG:NONE" cargo +nightly build
+```
+
+`/DEBUG:NONE` 必须一起带 —— `RUSTFLAGS` 优先级高于 `.cargo/config.toml` 的 `[target.*] rustflags`。
+另外 cranelift **不支持 `lto = "fat"`** → 注定 dev-only，release 必须留 LLVM。
+
+### E10.5 顺带：xmake 的 no-op 半秒拆解
+
+| | 纯启动 | 读构建状态 | no-op 合计 |
+|---|---|---|---|
+| xmake 3.1 | **262 ms** | ~285 ms | 547 ms |
+| cargo 1.98 | **155 ms** | ~4 ms | 159 ms |
+
+⇒ cargo 的空载几乎只有进程启动；xmake 每次要跑一遍 Lua VM 执行 `xmake.lua` 才能得出构建图。
+
+---
+
+<a id="e11"></a>
+## E11 · Rust vs xmake 实时对标（三层）
+
+> 正文见 [`04-rust-vs-xmake-speed.md`](04-rust-vs-xmake-speed.md)
+> Rust：`ip-bare`（907 行，零依赖 no_std，dev `opt-level=0`）
+> C：`ip-c`（256 行，winsock2 + iphlpapi，xmake 3.1 + MinGW gcc 15.2）
+
+| 层次 | Rust | C / xmake | 比值 |
+|---|---|---|---|
+| 冷构建（配置缓存） | **388 ms** | 1,070 ms | **0.36×** |
+| 增量（改一行） | **320 ms** | 538 ms | **0.59×** |
+| **no-op** | **159 ms** | **547 ms** | **0.29×** |
+| exe | **18,432 B** | 19,456 B | 0.95× |
+
+**Rust 那份源码还多 3.5 倍行数。** 根因在 C 的预处理：256 行 → `gcc -E` 后 **122,914 行（480×）**，
+`-ftime-report` 显示 **93% 时间在解析 323 个系统头文件**；而 Rust 的 `windows-sys` 是预编译 rlib。
+
+xmake 全冷（含重新 configure）另测：2,148 / 2,442 / 2,459 ms。
