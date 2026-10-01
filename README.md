@@ -29,6 +29,28 @@
   **可比规模上 Rust 全面超越**（冷 0.36×、增量 0.59×、no-op 0.29×），
   但真实项目的绝对冷构建赢不了 —— 那是**编译量**的差异，不是**编译器速度**的差异。
 
+### 如果你不满足于"改配置"，想要一个**能用的工具**
+
+[`cargo-xmake/`](cargo-xmake/) —— 兼容 cargo 的子命令（`cargo new` / `run` / `build` / `test` 全部照旧），
+`cargo xmake setup` 一步拿到 xmake 档的 dev，`cargo xmake audit` 排出单态化热点，
+`cargo xmake dynify` 把热点改成 **dev 走 `&dyn Trait` / release 走 `<T: Trait>`**。
+
+实测（三份干净副本，只跑 `build` / `build --release`）：N=200 的对照工程上
+
+| | dev 单态化 | `target/` | dev exe | release exe |
+|---|---|---|---|---|
+| 原样 | 416 | 5,042,395 B | 229,888 B | 135,168 B |
+| `setup` | 420 | 4,062,616 B | 230,912 B | 143,872 B |
+| `setup` + `dynify` | **218（−47.6%）** | **3,716,406 B** | **177,664 B（−22.7%）** | **143,872 B** |
+
+**release 档四项数字与只 `setup` 时逐项相同** —— 静态派发原样恢复，运行时零代价。
+（原样的 release 更小是吃到了用户全局 `opt-level="z"`，不是我们的功劳。）
+
+`cargo xmake undo` 两半都能回：配置按 `# cargo-xmake` 标记删行，
+源码按 `// cargo-xmake:dyn` 标记把 `cfg` 分支对折叠回泛型原样，**逐字节**还原，
+且可重复执行（幂等）。回归用 `bash scripts/smoke_cargo_xmake.sh`（27 项断言）。
+设计与全部实测见 [`docs/06-cargo-xmake.md`](docs/06-cargo-xmake.md)。
+
 ### 如果你只想抄配置
 
 | 场景 | 看这里 |
@@ -118,6 +140,7 @@ CI **完全不受影响**（它只用 `-p <crate>`）。真实项目实测见 [`
 │   ├── 03-build-speed.md                 ★★ 只讲「构建速度」怎么解（痛点在这里就看这个）
 │   ├── 05-toolchain-cards.md             ★★ 还想再快？lld/并行前端/cranelift 实测 + 两个测量陷阱
 │   ├── 04-rust-vs-xmake-speed.md         ★ Rust vs C(xmake) 三层对标：到底做到了没有
+│   ├── 06-cargo-xmake.md                 ★★ cargo-xmake 的设计决策与全部实测
 │   ├── 00-experiment-log.md              ★ 全部实验台账 E1~E11（再看这个）
 │   ├── 02-lilyco-measurements.md          在真实 865 包工作区上的实测（含三个踩坑）
 │   ├── XMAKE_VS_RUST_PIPELINE.md          R1 对标 xmake：汇编层 + 全流程
@@ -129,11 +152,15 @@ CI **完全不受影响**（它只用 `-p <crate>`）。真实项目实测见 [`
 │   ├── CAN_MATCH_C.md                     R7 能否在体积上对标 C
 │   ├── TUI_NOSTD_CORRECTION.md            R8 一次误判的纠正
 │   └── RUST_FAST_SMALL.md                 R9 速查
+├── cargo-xmake/                          ★★ 可用的工具本体（零依赖，cargo 子命令）
+│   ├── README.md                         用法 + 实测 + 诚实的边界
+│   └── src/{main,lib,cli,plan,config,run,audit,dynify,util}.rs
 ├── configs/
 │   ├── Cargo.toml.1GB-config              最终定稿配置（含标定数据注释）
 │   ├── Cargo.toml.tauri-optimized         中间版本（保留对照）
 │   └── dot-cargo-config.toml              .cargo/config.toml 内容
 ├── scripts/
+│   ├── smoke_cargo_xmake.sh               cargo-xmake 端到端回归（27 项断言）
 │   ├── apply_tauri_opt.py                 批量应用到真实项目（幂等 + 备份）
 │   ├── tauri_disk_audit.py                磁盘体检（只读）
 │   ├── measure_all.py / measure_final.py / measure_one.py   E1 的测量脚本
@@ -141,6 +168,7 @@ CI **完全不受影响**（它只用 `-p <crate>`）。真实项目实测见 [`
 └── experiments/
     ├── tauri-probe/                       E2~E8 的测量工程（含全部 _bench*.json）
     ├── lilyco-measure/                    E9 真实工作区测量（measure.py + _cgu_test.py）
+    ├── dynproof/                          E12 单变量对照：generic vs dyn（gen.py/measure.py）
     ├── ip-nostd/ ip-bare/ ip-bare-gnu/    E1 的零依赖裸程序（Rust）
     ├── ip-c/ ip-c-msvc/ ip-go/            E1 的对照实现（C / Go）
     ├── ip-base/ ip-size/ ip-speed/ ip-tiny/ ip-xr/ ip-lib/ ip-std/

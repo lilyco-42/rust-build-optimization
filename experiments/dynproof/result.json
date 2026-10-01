@@ -1,0 +1,24 @@
+[
+  {
+    "variant": "mono",
+    "dev_build_s": 1.03,
+    "dev_target_mb": 1.47,
+    "dev_exe_b": 229888,
+    "mono_instances": 200,
+    "rel_build_s": 3.27,
+    "rel_target_mb": 0.96,
+    "rel_exe_b": 143872,
+    "run_ms": 10.7
+  },
+  {
+    "variant": "dyn",
+    "dev_build_s": 0.55,
+    "dev_target_mb": 1.41,
+    "dev_exe_b": 177664,
+    "mono_instances": null,
+    "rel_build_s": 2.86,
+    "rel_target_mb": 0.96,
+    "rel_exe_b": 143360,
+    "run_ms": 11.7
+  }
+]

@@ -15,6 +15,15 @@ target-*/
 # Rust
 **/*.rs.bk
 
+# rustc 的单态化报告 —— 注意它写在 **crate 根目录**，不是 target/。
+# cargo-xmake 读完会删掉自己生成的，但你手动跑 -Zdump-mono-stats 时会留下。
+experiments/**/human/
+*.mono_items.json
+*.mono_items.md
+
+# cargo-xmake 的改写备份（正常退出时会自动清掉；留着说明上次验证失败了）
+*.xmake-bak
+
 # Python
 __pycache__/
 *.py[cod]

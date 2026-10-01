@@ -1,0 +1,30 @@
+[package]
+name = "cargo-xmake"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "A cargo subcommand that gives debug builds C/xmake-like speed and size, and keeps release at full static-dispatch performance."
+license = "MIT"
+repository = "https://github.com/lilyco-42/rust-build-optimization"
+publish = false
+
+# 刻意保持零依赖。
+#   1. 构建工具自身必须秒装秒编（cargo install --path . 约 0.5s）；
+#   2. 零依赖 => 不会因为自己的依赖树把用户的 target/ 撑大；
+#   3. 也避免 proc-macro 拖慢首次安装。
+[dependencies]
+
+[lib]
+name = "cargo_xmake"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cargo-xmake"
+path = "src/main.rs"
+
+# 开发时自己也享受一下"关 PDB"的待遇。
+[profile.dev]
+opt-level = 0
+debug = false
+strip = "debuginfo"
+incremental = true

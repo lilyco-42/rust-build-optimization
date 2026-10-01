@@ -24,6 +24,7 @@
 | [E9](#e9) | lilyco 首次真实测量 · `default-members` · `codegen-units` 单变量 | `_cgu.json` |
 | [E10](#e10) | 四张牌：lld / 并行前端 / cranelift · 两个测量陷阱 | `speed_cards*.json` |
 | [E11](#e11) | Rust vs xmake 实时对标（冷/增量/**no-op** 三层） | `ip-c` `ip-bare` |
+| [E12](#e12) | cargo-xmake：去泛型的单变量对照 + 工具设计实测 | `dynproof/` `cargo-xmake/` |
 
 ---
 
@@ -417,3 +418,225 @@ RUSTFLAGS="-Zcodegen-backend=cranelift -Clink-args=/DEBUG:NONE" cargo +nightly b
 `-ftime-report` 显示 **93% 时间在解析 323 个系统头文件**；而 Rust 的 `windows-sys` 是预编译 rlib。
 
 xmake 全冷（含重新 configure）另测：2,148 / 2,442 / 2,459 ms。
+
+---
+
+## E12 · cargo-xmake：去泛型的单变量对照 + 工具设计实测
+
+需求：做一个兼容 cargo 的子命令，dev 像 xmake 一样快、一样小；
+**dev 开虚函数少单态化，release 关虚函数换性能**。
+完整叙事见 [`06-cargo-xmake.md`](06-cargo-xmake.md)，工具在 `cargo-xmake/`。
+
+### E12.1 单变量对照（`experiments/dynproof`）
+
+`gen.py` 生成两份源码，751 行（N=60）/ 2,431 行（N=200），**只差第 668 行一处签名**：
+
+| N=200 | LLVM `define` 总数 | IR 字节 | `drive` 副本 |
+|---|---|---|---|
+| `fn drive<T: Work>(t: &T, n: u64)` | 416 | 994,153 | **200** |
+| `fn drive(t: &dyn Work, n: u64)` | 217 | 310,661 | **1** |
+
+→ **−47.8% define / −68.8% IR / 200→1 副本**。
+release 下两者 exe **完全相同**（177,664 B）：fat LTO 把 dyn 调用去虚化+内联了，
+所以去泛型只在 dev 有价值。
+
+### E12.2 🔴 没有任何 `-Z` 开关能减少单态化
+
+同一个 mono 工程，只换开关跑 `--emit=llvm-ir`：
+
+| 开关 | IR 字节 | 结论 |
+|---|---|---|
+| 基线 | 4,101,270 | — |
+| `-Zshare-generics=yes` | 4,101,270 | **完全相同** |
+| `-Zshare-generics=no` | 4,101,270 | **完全相同**（单 crate 没东西可共享） |
+| `-Zmir-opt-level=0` | 4,129,667 | +0.7% |
+| `-Zinline-mir=no` | 4,125,785 | +0.6% |
+| `-Zpolymorphize` | — | **`unknown unstable option`**，1.100 已移除 |
+
+纠正上一轮我自己的错误笔记（「`-Zpolymorphize` 可用」）。
+
+**还要再纠正一次（同一位置，第二轮）**：我曾在这里写
+「`-Zdump-mono-stats` 什么都不输出，是死路径」。**错。**
+它只是**不写进 `target/`** —— 报告落在 **crate 根目录的 `human/`**：
+
+```
+<crate>/human/<name>.mono_items.json
+<crate>/human/<name>.mono_items.md
+```
+
+我当时只 `ls target/`，看不到就下了"死路径"的结论。现在它是**首选**数据源，
+因为 rustc 顺带给了成本模型：
+
+```json
+[{"name":"drive","instantiation_count":200,"size_estimate":40,"total_estimate":8000},
+ {"name":"<T152 as Work>::step","instantiation_count":1,"size_estimate":10,"total_estimate":10}]
+```
+
+`total_estimate = count × size_estimate` 就是 rustc 自己的成本模型，正是"按收益排序"要的排序键。
+
+另注：`-Zdump-mono-stats` **不能**挂在 cargo 自己的命令行上
+（`error: unknown -Z flag specified`），必须经 `RUSTFLAGS` 或 `cargo rustc --` 传。
+`-Zprint-mono-items=lazy` 也是错的，只接受 `y/yes/on/true/n/no/off/false`。
+
+### E12.3 🔴 环境变量剖面注入会引发全量重编
+
+```
+[1] cargo build              → Compiling
+[2] cargo build              → Fresh (0.01s)
+[3] 带 CARGO_PROFILE_DEV_*   → Compiling      ← the profile configuration changed
+[4] 纯 cargo build           → Compiling
+[5] 带 env 的 cargo build    → Compiling
+```
+
+→ 所以剖面设置写 `.cargo/config.toml`（`[profile.*]` 实测生效且**优先级高于 `Cargo.toml`**），
+指纹稳定、`cargo` 与 `cargo xmake` 共用缓存、CI 自动吃到。
+
+### E12.4 🔴 四种 rustflags 注入途径，只有一种能追加
+
+| 途径 | 实测 |
+|---|---|
+| config 文件 `[target.X] rustflags` | 生效 |
+| `CARGO_ENCODED_RUSTFLAGS` | 整体替换 |
+| `RUSTFLAGS` | 整体替换 |
+| `CARGO_BUILD_RUSTFLAGS` | **被 `[target.X] rustflags` 静默压制**（不报错，直接消失） |
+| `cargo --config 'target.X.rustflags=[…]'` | **与 config 合并** ✅ |
+
+### E12.5 🔴 用户全局配置是「隐形」的剖面来源
+
+本机 `~/.cargo/config.toml` 有 `[profile.release] opt-level = "z"`。
+于是同一个项目「没配 profile」release exe 135,168 B，
+「配了 `[profile.release]`」变成 143,872 B（`-C opt-level=3`）—— **大了 6.5%，原因不可见**。
+
+附带：本机 `CARGO_HOME` 指向 rustup 目录（`.../rustup/.cargo`），但 cargo 实际吃的是 `~/.cargo/config.toml`。
+工具不猜，两个候选都报。
+
+### E12.6 🔴 `cargo clean -p` 在新布局下不可靠
+
+`audit` 要强制目标 crate 重编（否则第二次是 fresh，0 行输出）。
+`cargo clean -p` 实测 `Removed 0 files` 然后 cargo 照样 `Finished`。
+解法：`cargo rustc -- -C metadata=<nonce>`，额外参数**只作用于目标 crate**，
+依赖不重编（实测每次只有 `Compiling dynproof-mono`）。
+
+### E12.7 工具端到端验证（三份干净副本，只跑 build / build --release）
+
+| 组 | dev 单态化 | `target/` | dev exe | release exe | release 单态化 | PDB |
+|---|---|---|---|---|---|---|
+| A 原代码 / 无 config | 416 | 5,042,395 B | 229,888 B | 135,168 B ※ | 416 | 4 个 |
+| B 原代码 / `setup` | 420 | 4,062,616 B | 230,912 B | 143,872 B | 406 | **0 个** |
+| C `setup` + `dynify` | **218（−47.6%）** | **3,716,406 B** | **177,664 B（−22.7%）** | 143,872 B | **406** | **0 个** |
+
+※ A 的 release 更小是因为它吃到用户全局 `opt-level="z"`（见 E12.5），不是我们的功劳。
+
+**C 与 B 的 release 四项数字完全一致**（406 份 / 8 个根 / `drive` 8000 / `step` 1998），
+且 `drive` 恢复成 200 份 —— **「dev 开虚函数 / release 关」成立，release 零代价。**
+
+必须说清的一点：**B 的 dev 单态化是 420 份，比 A 的 416 还多 4 份。**
+`setup` 本身**不减少单态化**，它改的是 debug 信息 / opt-level / 链接参数；
+减少单态化的只有 `dynify`。混为一谈就会得出错误的因果。
+
+`<# as Work>::step` 前后都是 200 —— vtable 每类型必然一份，dyn 化去不掉。
+（我第一版把它也算进"可回收"，报 95%，与实测 47% 差一倍；现已分开统计。）
+
+### E12.8 🔴 stable 兜底：v0 mangling 得自己解，且"数符号"≠"数实例"
+
+`-Zdump-mono-stats` / `-Zprint-mono-items` 都只有 nightly 有。stable 用户只剩
+`--emit=llvm-ir`，而 IR 里的符号是 **v0 mangling**（`_RINvCs…5driveNtB2_2T0EB2_`）。
+
+两条捷径实测都堵死：
+
+| 捷径 | 实测 |
+|---|---|
+| `-C symbol-mangling-version=legacy` | **`requires -Z unstable-options`**，stable 不可用 |
+| 引现成 demangler 库 | 打破"工具自身零依赖" |
+
+原土办法（抠 `<len><ident>`）把名字解成垃圾（`cuyqEa_3::rt::lang_start::Q::Ezirg`），
+416 个符号归出 415 个根 → 报"只有 1 份重复、可回收 0%"。**这比没数据更坏，
+因为它看起来像结论。**
+
+自写 v0 子集解码器（只求归一、不求保真）后，**跨模式交叉验证**通过：
+
+| | nightly `-Zprint-mono-items` | stable `--emit=llvm-ir` |
+|---|---|---|
+| #1 | `<# as Work>::step` 200（vtable） | `<# as Work>::step` 200（vtable） |
+| #2 | `drive` 200（可 dyn 化） | `drive` 200（可 dyn 化） |
+| 根数 | 18 | 14 |
+
+但**口径不同，必须标注**：IR 数的是符号不是实例 —— `main` 数成 2 份、
+`std::rt::lang_start` 数成 4 份，而 rustc 的实例化计数都是 1。
+`audit` 因此在 IR 模式下打一行黄字说明。
+
+### E12.9 🔴 `dynify` 的编译验证会留下孤儿增量缓存
+
+`dynify --rewrite` 落盘后跑 `cargo check` 验证。**check 与 build 的指纹不同**：
+
+```
+s_cfg → target/debug/incremental/ 1 个目录   3,309,709 B
+s_dyn → target/debug/incremental/ 2 个目录   3,069,216 B（真实缓存，还变小了）
+                                            +1,716,202 B（cargo check 的孤儿）
+```
+
+`target/` 因此从 4,062,616 B **涨到** 5,432,598 B —— 看上去像"去泛型反而更占磁盘"。
+
+修法（与 `human/` 同一纪律）：前后各快照一次 `incremental/` 子目录，
+**只删本次新建的**，用户原有缓存一个都不碰。
+修完 5,432,598 → **3,716,406 B**，比只 setup 的还小，数据自洽。
+
+### E12.10 复盘：这一轮我错在哪
+
+| # | 做法 | 实际 | 教训 |
+|---|---|---|---|
+| 1 | 笔记写「`-Zpolymorphize` 可用」 | 1.100 已移除 | `-Z` 开关每次都要问 `rustc -Zhelp` |
+| 2 | 用 `tr` 按空格切 rustc 参数、再 grep `^-Copt` | rustc 打的是 `-C opt-level=3`（带空格），全漏掉 | **先用一个已知会出现的 flag 校准 grep** |
+| 3 | `restore()` 用 `with_extension("rs")` 反推文件名 | `main.rs.xmake-bak` → `main.rs.rs`，**原文件保持坏状态且不报错** | 回滚路径必须写测试 |
+| 4 | 替换区间从 `fn` 开始 | 生成 `pub #[cfg(…)] fn` | 改写要覆盖整个 item 头 |
+| 5 | `match_brace` 把 `->` 的 `>` 当泛型闭合 | 扫描到 0 个候选 | 加测试 `arrow_does_not_break_brace_matching` |
+| 6 | `reclaimable()` 把 vtable 槽位也算进去 | 报 95%，实测 47% | 分母要分清两类份额 |
+| 7 | 测量脚本 A 组删了 config，B 组没装回来 | B 组等于没配置，测出"setup 无收益" | **读数符合预期时，最容易漏掉检查脚本** |
+| 8 | 写「`-Zdump-mono-stats` 是死路径」 | 它写在 **crate 根的 `human/`**，我只翻了 `target/` | **"在预期位置没找到" ≠ "没产生"** |
+| 9 | 用 `from_generic`（看名字有没 `::<T0>`）当"可 dyn 化"开关 | rustc 代价模型给裸名 `drive`，开关恒 false → `reclaimable()` 恒 0 | 判据要跨数据源成立，且**主路径上的开关必须有测试** |
+| 10 | `duplicated() && is_vtable_slot()` 判 vtable 标签 | 两谓词互斥 → 表达式恒假，标签整个消失 | 互斥谓词写成 if/else if，或用 `^` 断言（已加测试） |
+| 11 | 体积测量前先手工跑 `cargo rustc --emit=llvm-ir -Cmetadata=…` 探路 | 那些调用往 `target/` 塞了 nonce 产物，`target/` 从 4.06 MB 虚涨到 16 MB | **测量动作本身会污染被测对象；体积数字只能来自干净副本** |
+| 12 | `undo` 只撤了配置，help 却写着"还原" | `src/main.rs` 里的 `#[cfg(not(debug_assertions))]` 留在原地 | **承诺可逆就要两半都做完** |
+| 13 | 往返差了 1 个换行，我先去"补偿" `render()` 末尾的 `\n` | 真正的错配是 `apply()` 调了 `trim_end()` 而测试没调 —— 测试没镜像真实路径；补偿改错了地方，反而把真实路径弄坏 | 偏差出现先问「我测的和跑的是同一条路径吗」，**别急着改被怀疑的那一方** |
+| 14 | 第二次 `undo` 崩在 `读 .cargo/config.toml 失败: os error 3` | 第一次 `undo` 刚把整份 config（全是我们写的）删了 | **幂等**是 `undo` 的必修项，文件缺失要当"无事发生" |
+
+第 7、9、10、11 条是同一条：**读数符合预期时最容易漏掉检查**；
+第 13 条是它的镜像：**偏差出现时最容易改错地方**。
+
+### E12.11 `undo` 的可逆性：两半都得能回，而且得逐字节
+
+`undo` 要撤两样东西，难度完全不同：配置（删掉带 `# cargo-xmake` 标记的行）容易，
+源码（`dynify` 生成的两个同名函数要删掉其中一段）难。第一版只做了配置那一半。
+
+岔路两条都不通：
+
+* **用 `.xmake-bak` 备份还原** → 备份在编译验证成功后就删了，用户真想撤时已经没有；
+  而为了 `undo` 长期保留备份，`undo` 就变成**覆盖用户在 dynify 之后做的编辑**，更危险。
+* **靠"记得原文"** → 跨会话失效。
+
+落点：**标记驱动的结构性逆变换**。`dynify` 在每个生成函数上方留一行
+`// cargo-xmake:dyn`（稳定、唯一、可 grep），`undo` 靠它定位
+「一对 `#[cfg(…)] / #[cfg(not(…))]` 分支」，删掉第一条、留下第二条并去掉其属性。
+只动这一对分支，其它编辑一概不碰，跨会话有效；写回前仍新复制一份 `*.xmake-bak` 作当次安全垫。
+
+逐字节精确比看上去脆弱，这里栽了一次（详见 E12.10 第 13 条）。
+根因：`render()` 原来末尾带 `\n`，`revert` 就额外吃掉一个换行去"补偿"，
+但**真实路径**里 `apply()` 还调了 `rendered.trim_end()`，测试没有 ——
+测试没镜像真实路径，补偿也补在了错的地方，反而让真实路径少一个空行。
+把 `render()` 契约改成"**输出不带尾随换行**"、替换区间严格按「item 文本」对齐之后，
+`revert` 退回 `i = e2 + 1`，往返才真正逐字节相等。
+契约由 `render_has_no_trailing_newline` 与
+`render_then_revert_roundtrips_byte_for_byte` 两条测试钉住。
+
+两个收尾细节：
+
+| 情况 | 行为 |
+|---|---|
+| 删完只剩空行（整份文件都是我们写的） | **连文件 + 空的 `.cargo/` 目录一起删掉**，不留 1 字节尸体 |
+| 文件本来就不在（连续第二次 `undo`） | **幂等空操作**，`changed: false`，不再抛 `os error 3` |
+
+整条链路固化为 `scripts/smoke_cargo_xmake.sh`（临时工程走完
+`setup → dynify --rewrite → build → undo → 再 undo`，27 项断言，
+含「源码 md5 逐字节还原」「二次 undo 幂等」「release 零代价」
+「同一份 config 下 dev 产物确实更小」「多约束函数被预期拒绝」）。
+`cargo test` 30 项，`cargo xmake selftest` 通过。
