@@ -8,6 +8,12 @@
 
 ## 结论速查
 
+### 先看方法论
+
+如果你要**优化一个新项目**，先读 [`docs/01-methodology.md`](docs/01-methodology.md) ——
+它讲的是「怎么想」：先分清你优化的是**编译量**还是**编译产物**，
+再顺着五层阶梯往下走。这套方法比任何具体配置都更可迁移。
+
 ### 如果你只想抄配置
 
 | 场景 | 看这里 |
@@ -52,7 +58,8 @@
 ```
 .
 ├── docs/
-│   ├── 00-experiment-log.md              ★ 全部实验台账（先看这个）
+│   ├── 01-methodology.md                 ★★ 优化思路：分层决策（先看这个）
+│   ├── 00-experiment-log.md              ★ 全部实验台账（再看这个）
 │   ├── XMAKE_VS_RUST_PIPELINE.md          R1 对标 xmake：汇编层 + 全流程
 │   ├── TAURI_DEV_EFFICIENCY_PLAN.md       R2 Tauri 开发效率方案
 │   ├── TAURI_1GB_ACHIEVED.md              R3 达成 1 GB 实录（含 opt-level 标定）
