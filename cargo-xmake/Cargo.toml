@@ -6,7 +6,10 @@ rust-version = "1.74"
 description = "A cargo subcommand that gives debug builds C/xmake-like speed and size, and keeps release at full static-dispatch performance."
 license = "MIT"
 repository = "https://github.com/lilyco-42/rust-build-optimization"
-publish = false
+readme = "README.md"
+# 只放 keywords，不放 categories —— categories 取值受 crates.io 白名单校验，
+# 写错会直接拒绝发布，收益却很小。
+keywords = ["cargo", "subcommand", "build", "optimization"]
 
 # 刻意保持零依赖。
 #   1. 构建工具自身必须秒装秒编（cargo install --path . 约 0.5s）；
