@@ -35,6 +35,8 @@
 [`cargo-xmake/`](cargo-xmake/) —— 兼容 cargo 的子命令（`cargo new` / `run` / `build` / `test` 全部照旧），
 `cargo xmake setup` 一步拿到 xmake 档的 dev，`cargo xmake audit` 排出单态化热点，
 `cargo xmake dynify` 把热点改成 **dev 走 `&dyn Trait` / release 走 `<T: Trait>`**。
+**想提速先看 `cargo xmake slim`** —— 它自动算 `default-members`（减编译量，实测 −56% 包数）；
+真实项目上 `dynify` 的收益只有 0.04%，而减编译量才是让 cargo 跑到 xmake 前面去的杠杆。
 
 实测（三份干净副本，只跑 `build` / `build --release`）：N=200 的**合成**对照工程上
 

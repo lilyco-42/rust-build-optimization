@@ -37,7 +37,14 @@ cargo xmake dynify
 # 落盘 + 自动编译验证 + 失败自动回滚
 cargo xmake dynify --rewrite
 
-# 后悔：配置删掉、源码折叠回泛型原样（逐字节还原）
+# 【真想提速，先跑这个】workspace 上算每个成员独占多少包，推荐 default-members
+cargo xmake slim
+# 自动挑掉独占最多的成员，试算能省多少（只读）
+cargo xmake slim --auto
+# 确认后写进工作区根 Cargo.toml（带标记，undo 可逆）
+cargo xmake slim --drop=lilyco-graphite,lilyco-tauri --apply
+
+# 后悔：配置删掉、源码折叠回泛型原样、slim 那行也一起删（逐字节还原）
 cargo xmake undo
 ```
 
@@ -100,6 +107,51 @@ cargo-xmake 在 release 只做一件事：把优化开关推到顶。
 ⚠️ 顺带一个必须记住的对比：**只 `setup` 时 dev 单态化是 420 份，比原样的 416 还多 4 份。**
 `setup` 本身**不减少单态化**（它改的是调试信息 / opt-level / 链接参数）；
 减少单态化的只有 `dynify`。把两者混为一谈会得出错误的因果。
+
+---
+
+---
+
+## 🔴🔴 先减编译量，再谈别的：`cargo xmake slim`
+
+**如果你的目标是"让 cargo 跑得比 xmake 快"，这一节是整个工具里最该看的一段。**
+
+`dynify` 改的是「泛型被复制成多少份」，但真实项目里那份收益只有 **0.04%** ——
+21623 份单态化、9616 份可回收副本中，
+**只有 8 份落在你自己的源码里**。它只能改你的源码，而热度大头在标准库和依赖里，
+结构上够不着。
+
+真正的大杠杆是**减编译量**：少编几个成员，就少编几百个包。
+
+| | 包数 |
+|---|---|
+| 全部 24 个成员 | **865** |
+| 显式 `default-members`（19 个） | **379** |
+| **省** | **486（56%）** |
+
+`slim` 把当初手工算这件事的过程自动化：
+
+```bash
+cargo xmake slim                          # 列出每个成员的独占包数
+cargo xmake slim --auto                   # 自动挑独占 ≥5% 的成员试算（只读）
+cargo xmake slim --drop=a,b --apply       # 确认后写进工作区根 Cargo.toml
+cargo xmake undo                          # 删掉那一行，逐字节还原
+```
+
+**它怎么算的**
+
+1. 跑一次 `cargo metadata`（带依赖图），解析 `resolve.nodes` 得到有向图；
+2. 对每个成员做一次闭包（它自己 + 它能到达的所有包）；
+3. **独占包数** = 该成员闭包里、别的成员闭包都覆盖不到的那些包 ——
+   也就是「去掉它就真的不再编」的部分；
+4. 按独占数排序，并给出丢掉某几个之后**确切**的新包数（不是估算）。
+
+**安全约定**
+
+- **绝不覆盖你自己写的 `default-members`** —— 遇到没有我们标记的就报错退出，让你自己处理；
+- 写入的那一行带 `# cargo-xmake-slim` 标记，`cargo xmake undo` 靠标记删除，**逐字节可逆**；
+- `--drop` 里给了不存在的成员名会**明确报错**，不会静默变成「什么都没丢」；
+- CI 不受影响：CI 一般用 `-p <crate>` 显式指定，本来就绕过 `default-members`。
 
 ---
 
@@ -258,6 +310,7 @@ opt-level = "z"     ← 于是"没配 profile"的项目 release 是 -C opt-level
 | `cargo xmake doctor` | 打印会生效的每一刀 + 所有配置来源 |
 | `cargo xmake audit` | 单态化热点排序（三源降级：`-Zdump-mono-stats` → `-Zprint-mono-items` → 数 LLVM IR） |
 | `cargo xmake dynify` | 去泛型改写，默认只预览；`--rewrite` 落盘并自动编译验证 |
+| `cargo xmake slim` | **减编译量**：算各成员的独占包数并推荐 `default-members`（`--auto` 试算，`--drop=a,b --apply` 落盘） |
 | `cargo xmake selftest` | 造个临时 crate 验证「config → rustc 命令行」整条链路 |
 
 开关都带 `--xmk-` 前缀，放在命令行**任意位置**都行，cargo 永远看不到它们：
