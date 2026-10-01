@@ -1,0 +1,5 @@
+# no_main + no_std：MSVC 链接器不会自动推导子系统，必须显式给。
+#   /ENTRY      指向我们自己的 mainCRTStartup（跳过 CRT 启动代码）
+#   /DEBUG:NONE 关掉 PDB —— 一个 23KB 的程序配 360KB 的 PDB，target/ 一大半是它
+[build]
+rustflags = ["-C", "link-args=/ENTRY:mainCRTStartup /SUBSYSTEM:CONSOLE /DEBUG:NONE"]

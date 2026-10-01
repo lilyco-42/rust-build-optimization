@@ -1,0 +1,13 @@
+# 放到 src-tauri/.cargo/config.toml
+# 项目级配置 —— 只影响本项目
+
+# 🔴 决定性的一刀：让 MSVC 链接器不生成 PDB
+#    实测 .pdb 181 MB -> 0，build/ 184 MB -> 62 MB
+#    代价：无法用 WinDbg/VS 断点调试（panic 回溯仍正常）
+#    需要调试时，把这行注释掉
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/DEBUG:NONE"]
+
+# sccache：换分支/cargo clean 后重建提速（实测 113s -> 61.5s）
+[build]
+rustc-wrapper = "sccache"

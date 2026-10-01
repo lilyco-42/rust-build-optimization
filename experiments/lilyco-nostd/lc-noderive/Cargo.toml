@@ -1,0 +1,9 @@
+[package]
+name = "lc_noderive"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 关键：serde 不开 derive —— 不引入 serde_derive / syn / quote / proc-macro2
+serde = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

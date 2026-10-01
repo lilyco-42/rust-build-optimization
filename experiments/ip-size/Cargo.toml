@@ -1,0 +1,25 @@
+[package]
+name = "ip-size"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lilyco = { git = "https://github.com/lilyco-42/lilyco", package = "lilyco", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# dev = 速度最大（与 ip-base 对齐，共享 target 时依赖指纹一致可复用）
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+incremental = true
+codegen-units = 256
+
+# B组 = 均衡体积：z 优化 + 全 LTO + 单 codegen + 去符号 + abort
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false

@@ -1,0 +1,116 @@
+# ============================================================================
+# Tauri 开发档最终配置 —— 实测 target 4,135 MB -> 1,014 MB（-75%）
+#
+# 取舍前提（用户明确）：
+#   * 开发内环要快（cargo build / cargo check）
+#   * 产物尽可能小（硬盘紧）
+#   * release 慢无所谓，丢 GitHub Actions
+#   * 开发只用 dbg!() / println!，不需要断点调试
+#
+# 用量：把下面内容追加到「workspace 根」的 Cargo.toml
+#       （单 crate 项目就是 src-tauri/Cargo.toml）
+# ⚠️ [profile.*] 写在 ~/.cargo/config.toml 里会被 cargo 静默忽略！
+#
+# 配套：src-tauri/.cargo/config.toml（内容见文件末尾注释）
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# 第 1 刀：去掉 staticlib / cdylib —— 省 183 MB
+# 这两个 crate-type 是给「移动端」用的，桌面端完全不需要。
+# 留着会产出 207 MB 的 .lib（与 rlib 同内容，两个文件硬链接到同一 inode，
+# du 会重复计数）。cargo 看项目里存在 android/ 或 ios/ 目录也会继续产。
+#
+# ⚠️ 若以后要跑 `tauri android init` / `tauri ios init`，必须改回
+#    crate-type = ["staticlib", "cdylib", "rlib"]
+# ----------------------------------------------------------------------------
+[lib]
+name = "your_app_lib"          # ← 改成你 src-tauri/Cargo.toml 里原来的 name
+crate-type = ["rlib"]
+
+# ----------------------------------------------------------------------------
+# 第 2 刀：dev 档 —— 自己的代码省 82 MB
+# ----------------------------------------------------------------------------
+[profile.dev]
+opt-level = 1                  # 自己代码：1 是速度/体积的甜点（不用 0，太笨重）
+debug = false                  # 🔴 完全不产 DWARF。dbg!/println! 不受影响
+incremental = true             # 🔴 日常档保留增量（内环快）
+                               #   改 false 立刻再省 61 MB -> 953 MB，但每次改一行重编整 crate
+codegen-units = 16             # 增量编译友好
+strip = "debuginfo"
+panic = "abort"
+
+# ----------------------------------------------------------------------------
+# 第 3 刀：依赖侧 opt-level="z" —— 省 113 MB（rlib 559 -> 512 MB）
+#
+# 🔴 这一刀是「反直觉」的，别被直觉骗了（实测 5 组，sccache 已禁用）：
+#   依赖 opt-level  冷构建     target      .rlib
+#        0          120.1s    1,157 MB    632 MB   ← 最快，最占地方
+#        1          201.1s    1,069 MB    530 MB
+#        2          249.7s    1,143 MB    561 MB   ← 最慢，还不小
+#        "z"       176.6s    1,014 MB    512 MB   ← 体积最小，且比 1/2 更快 ✅
+#   混合(windows z)  120.2s   1,150 MB    621 MB   ← 无效，≈全 0
+#
+# ① "z" 比 opt-level=1 更快（176.6 vs 201.1s）同时小 55 MB：
+#    z 跳过向量化/循环展开等昂贵 pass，编译反而更快。
+#    「体积优化必然更慢」是错的。
+# ② opt-level=2 是双输：最慢且不最小。
+# ③ 只给 windows* 单独设 z 无效 —— 要体积必须「全局 z」。
+#
+# 为什么选 z 不选 0：
+#    opt-level 只影响依赖，而依赖在增量构建时根本不重编 ——
+#    +56 秒只花在冷构建（一次性），省的 143 MB 是永久的。
+# ----------------------------------------------------------------------------
+[profile.dev.package."*"]
+opt-level = "z"
+debug = false
+
+# ----------------------------------------------------------------------------
+# release：丢 CI，随便它慢
+# ----------------------------------------------------------------------------
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+incremental = false
+overflow-checks = false
+debug-assertions = false
+
+# ============================================================================
+# 配套文件：src-tauri/.cargo/config.toml
+#
+#   # 🔴 第 4 刀（决定性）：/DEBUG:NONE 让 MSVC 链接器不生成 PDB —— 省 179 MB
+#   #    .pdb 181 MB -> 0，build/ 184 MB -> 62 MB
+#   #    没有这一刀，其他全做满也只能到 1,132 MB，摸不到 1 GB
+#   #    即使 [profile.dev] debug = false，rustc 仍会给 MSVC 传 /DEBUG，PDB 照产
+#   [target.x86_64-pc-windows-msvc]
+#   rustflags = ["-C", "link-args=/DEBUG:NONE"]
+#
+#   # sccache：切分支 / clean 后重建提速（无缓存 113.1s -> 全命中 61.5s，1.84x）
+#   #   注意命中率天花板约 57%：build.rs 产物与 proc-macro（serde_derive、
+#   #   tauri-macros）sccache 缓存不了，这部分是硬地板
+#   [build]
+#   rustc-wrapper = "sccache"
+# ============================================================================
+
+# ============================================================================
+# 最终构成（1,014 MB 日常档）
+#   .rlib   512 MB   304 个依赖的机器码      ← 不可删
+#   .rmeta  332 MB   依赖接口元数据（供 check） ← 不可删
+#   build/   62 MB   build script 产物
+#   .pdb      0 MB   ✅ 被 /DEBUG:NONE 干掉
+#   ⇒ 844 MB 是硬地板（rlib + rmeta），任何优化都动不了
+#
+# 两档只差一行：
+#   日常档  incremental = true   -> 1,014 MB（内环快）   ← 已应用
+#   极限档  incremental = false  ->   953 MB（内环慢 61 MB）
+#
+# ⚠️ 关于 debug = false / /DEBUG:NONE 的代价 —— 用户已确认可接受：
+#   * dbg!(x) 输出的 file:line 是编译期字面量，与 debug 信息无关，照常工作
+#   * println! 完全不受影响
+#   * panic 回溯仍能显示函数名（符号来自 rlib）
+#   * 失去的只有：WinDbg / VS 里设断点、看变量
+#   需要断点调试时（罕见）：
+#       debug = "line-tables-only"  并注释掉 /DEBUG:NONE  -> 约 1.13 GB
+# ============================================================================

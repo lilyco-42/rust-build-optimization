@@ -1,0 +1,52 @@
+[package]
+name = "ip-lib"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+# 与 ip-bare 的唯一区别：手写的 CRT 原语 / FFI 声明 / 链接参数换成 no_std 库。
+#   rlibc        -> memcpy/memmove/memset/memcmp（取代 4 个手写函数中的 3 个）
+#   windows-sys  -> 全部 Win32 FFI 声明（取代 ~130 行手写 extern 块 + 结构体）
+# 仍自写：strlen（rlibc 不含）、__CxxFrameHandler3（无库）、mainCRTStartup、panic_handler
+#
+# ⛔ 不用 compiler_builtins：stable 上无法作为普通依赖。
+# ⛔ 不用 no-panic：拖 syn+quote+proc-macro2，编译慢 23 倍。
+
+[dependencies]
+rlibc = "1"
+windows-sys = { version = "0.61", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_IO",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+    "Win32_Globalization",
+] }
+
+# dev = 速度最大 + target 最小
+[profile.dev]
+opt-level = 0
+debug = false
+incremental = false
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+overflow-checks = false
+debug-assertions = false
+
+# release = 体积最小
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
+debug-assertions = false

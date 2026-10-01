@@ -1,0 +1,19 @@
+==============================================================================================================
+依赖 opt-level 对比（已禁用 sccache，每次 cargo clean）
+==============================================================================================================
+  自己代码固定 opt-level=1；变量只有依赖的 opt-level
+
+  A 依赖 opt-level=0 (编译最快?)                  120.1s  total  1157.3MB  rlib  632.0  rmeta  322.9
+  B 依赖 opt-level=1                          201.1s  total  1068.6MB  rlib  529.8  rmeta  332.1
+  C 依赖 opt-level=2                          249.7s  total  1143.3MB  rlib  560.9  rmeta  369.9
+  D 依赖 opt-level="z" (体积最小?)                176.6s  total  1013.9MB  rlib  511.8  rmeta  332.0
+  E 混合: windows* 用 z，其余 0                   120.2s  total  1150.5MB  rlib  621.4  rmeta  326.8
+
+(.cargo/config.toml 已恢复)
+
+### 汇总 ###
+  A 依赖 opt-level=0 (编译最快?)                  120.1s   1157.3MB
+  B 依赖 opt-level=1                          201.1s   1068.6MB
+  C 依赖 opt-level=2                          249.7s   1143.3MB
+  D 依赖 opt-level="z" (体积最小?)                176.6s   1013.9MB
+  E 混合: windows* 用 z，其余 0                   120.2s   1150.5MB

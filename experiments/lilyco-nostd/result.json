@@ -1,0 +1,34 @@
+[
+ {
+  "label": "A \u73b0\u72b6 std+serde_json+thiserror",
+  "pkg": "lc_dep",
+  "cold": 7613.773799996125,
+  "incr": 777.2869999753311,
+  "exe": 664064,
+  "target": 117032153
+ },
+ {
+  "label": "D no_std+serde_json(alloc)",
+  "pkg": "lc_nostd_json",
+  "cold": 7302.000499999849,
+  "incr": 830.662599997595,
+  "exe": 666112,
+  "target": 107582123
+ },
+ {
+  "label": "B no_std+serde-json-core",
+  "pkg": "lc_nostd",
+  "cold": 7551.446400000714,
+  "incr": 795.3218000184279,
+  "exe": 511488,
+  "target": 91831356
+ },
+ {
+  "label": "C \u540cB\u4f46\u53bb\u6389 no_std",
+  "pkg": "lc_std",
+  "cold": 7701.023200002965,
+  "incr": 828.3175000105985,
+  "exe": 511488,
+  "target": 92312338
+ }
+]

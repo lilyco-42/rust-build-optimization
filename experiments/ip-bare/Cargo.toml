@@ -1,0 +1,32 @@
+[package]
+name = "ip-bare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 零依赖 crate：连 windows-sys 都不用，手写 FFI 直通 Win32 / libc。
+# 目标：把 rustc 的活压到「只编这一个文件 + 链接」，对标 xmake/C 的 0.45–0.78s / 13.5 KiB。
+
+[dependencies]
+
+# dev = 速度最大 + target 最小：关增量（小 crate 反而更快）、关调试信息、单 CGU
+[profile.dev]
+opt-level = 0
+debug = false
+incremental = false
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+overflow-checks = false
+debug-assertions = false
+
+# release = 体积最小
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
+debug-assertions = false

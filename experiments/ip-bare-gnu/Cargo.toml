@@ -1,0 +1,30 @@
+[package]
+name = "ip-bare-gnu"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 与 ip-bare 同一份源码，唯一差别：走 x86_64-pc-windows-gnu（zig cc 链接）。
+# 目的：验证 cargo-zigbuild 这条路线能不能出同样小的产物。
+
+[dependencies]
+
+[profile.dev]
+opt-level = 0
+debug = false
+incremental = false
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+overflow-checks = false
+debug-assertions = false
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
+debug-assertions = false

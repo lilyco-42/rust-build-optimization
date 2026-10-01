@@ -1,0 +1,10 @@
+# 项目级配置 —— 只影响本项目
+# 1) sccache：换分支/clean 后重建提速（实测 113s -> 61.5s）
+# 2) /DEBUG:NONE：关掉 MSVC 链接器的 PDB 生成（实测省 179 MB）
+#    注意：关闭后无法用 WinDbg 断点调试，需要时把这行注释掉
+
+[build]
+rustc-wrapper = "sccache"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/DEBUG:NONE"]

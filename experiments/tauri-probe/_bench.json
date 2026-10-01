@@ -1,0 +1,48 @@
+[
+  {
+    "label": "A1 \u9ed8\u8ba4 debug \u51b7\u6784\u5efa",
+    "sec": 111.6,
+    "target_mb": 4135.1,
+    "deps_mb": 2416.4,
+    "incr_mb": 302.1,
+    "build_mb": 300.7,
+    "exe_kb": 12399.0
+  },
+  {
+    "label": "A2 \u9ed8\u8ba4 debug \u589e\u91cf",
+    "sec": 8.9,
+    "note": "incremental"
+  },
+  {
+    "label": "B1 \u4f18\u5316 debug \u51b7\u6784\u5efa",
+    "sec": 154.4,
+    "target_mb": 1511.3,
+    "deps_mb": 1111.8,
+    "incr_mb": 71.8,
+    "build_mb": 183.9,
+    "exe_kb": 7587.5
+  },
+  {
+    "label": "B2 \u4f18\u5316 debug \u589e\u91cf",
+    "sec": 12.3,
+    "note": "incremental"
+  },
+  {
+    "label": "C1 \u6781\u9650\u7626\u8eab debug \u51b7\u6784\u5efa",
+    "sec": 224.6,
+    "target_mb": 1522.0,
+    "deps_mb": 1124.4,
+    "incr_mb": 0.0,
+    "build_mb": 178.7,
+    "exe_kb": 2936.0
+  },
+  {
+    "label": "D1 \u9ed8\u8ba4 release",
+    "sec": 180.3,
+    "target_mb": 1556.6,
+    "deps_mb": 1188.5,
+    "incr_mb": 0.0,
+    "build_mb": 216.0,
+    "exe_kb": 8294.5
+  }
+]

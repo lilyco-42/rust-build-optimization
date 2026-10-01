@@ -1,0 +1,4 @@
+# no_main + no_std：MSVC 链接器不会自动推导子系统，必须显式给。
+# /ENTRY 指向我们自己写的 mainCRTStartup（不经 CRT 启动代码）。
+[build]
+rustflags = ["-C", "link-args=/ENTRY:mainCRTStartup /SUBSYSTEM:CONSOLE"]

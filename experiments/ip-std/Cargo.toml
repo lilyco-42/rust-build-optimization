@@ -1,0 +1,26 @@
+[package]
+name = "ip-std"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 对照组：零第三方 crate，但用 std（正常 Rust 写法）。
+# 用来把「std 的成本」和「第三方依赖的成本」分开——上一轮账单里 syn/过程宏是大头，
+# 这一轮要看的是：把依赖降到 0 之后，剩下的税里 std 占多少。
+[dependencies]
+
+[profile.dev]
+opt-level = 0
+debug = false
+incremental = false
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false

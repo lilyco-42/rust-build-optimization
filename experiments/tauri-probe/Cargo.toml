@@ -1,0 +1,70 @@
+[package]
+name = "tauri-probe"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tauri_probe_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ============================================================================
+# Tauri 项目「开发效率 + 硬盘占用」优化配置 —— 最终定稿
+#
+# 实测收益（Tauri 2.12.1，291 个依赖，已禁 sccache 做纯净对比）：
+#   target/  4,135 MB  ->  1,014 MB（日常档）/ 953 MB（极限档）   省 75%~77%
+#   增量构建      8.9s  ->  12.3s      +3.4s（换来 3 GB+，值得）
+#   冷重建       113s  ->  61.5s       叠加 sccache，1.84x
+#
+# 用法：把本段【追加】到 workspace 根 crate 的 Cargo.toml 末尾。
+# ⚠️ [profile.*] 只有 workspace 根的 Cargo.toml 才读；放进成员 crate
+#    会告警并忽略，放进 ~/.cargo/config.toml 则完全无效（均已实测验证）。
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# 开发内环（cargo build / cargo tauri dev）
+# ---------------------------------------------------------------------------
+
+[profile.dev]
+opt-level = 1                # 自己的代码：1 是甜点
+debug = false                # dbg!/println! 不受影响
+incremental = true           # 日常档；改 false 再省 61 MB -> 953 MB，内环变慢
+codegen-units = 16
+strip = "debuginfo"
+panic = "abort"
+
+# 🔴 依赖侧全局 opt-level="z" —— 省 113 MB（rlib 632 -> 512 MB）
+#    实测 5 组（sccache 已禁用）：
+#      0   -> 120.1s / 1,157 MB / rlib 632 MB   （最快，最占地方）
+#      1   -> 201.1s / 1,069 MB / rlib 530 MB
+#      2   -> 249.7s / 1,143 MB / rlib 561 MB   （最慢，还不小）
+#      "z" -> 176.6s / 1,014 MB / rlib 512 MB   ← 体积最小，且比 1/2 更快
+#      混合(windows* 用 z，其余 0) -> 120.2s / 1,150 MB ≈ 全 0，无效
+#    "z" 比 1 更快的原因：跳过向量化/循环展开等昂贵 pass。
+#    为什么选 z 不选 0：opt-level 只影响依赖，依赖在增量构建时不重编，
+#    +56s 只在冷构建发生（一次性），省的 143 MB 是永久的。
+[profile.dev.package."*"]
+opt-level = "z"
+debug = false
+
+# ---------------------------------------------------------------------------
+# release：丢 CI
+# ---------------------------------------------------------------------------
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+incremental = false
+overflow-checks = false
+debug-assertions = false
+
+

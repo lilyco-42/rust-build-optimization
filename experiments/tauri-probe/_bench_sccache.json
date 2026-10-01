@@ -1,0 +1,11 @@
+[
+  {
+    "label": "no_sccache_cold",
+    "sec": 113.1,
+    "target_mb": 4135.2
+  },
+  {
+    "label": "sccache_first",
+    "sec": 121.2
+  }
+]

@@ -1,0 +1,46 @@
+[package]
+name = "ip-base"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 实验接线：指向本地 lilyco-src（同 rev 645a860，仅 lilyco-cli 去 color）
+lilyco = { path = "../lilyco-src/lilyco", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# dev = 速度最大：增量开 + 并行拉满 + 行号调试信息（PDB 最小可用）
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+incremental = true
+codegen-units = 256
+
+# 依赖去 PDB：第三方 crate 不生成调试信息（省 PDB 磁盘 + 省 debuginfo 发射时间）。
+# "…" 通配只命中非 workspace 成员，自家 lilyco/path 代码仍保留 line-tables-only。
+[profile.dev.package."*"]
+debug = false
+
+# 自家 path 依赖逐个加回来：日常要单步 lilyco 框架代码，行号信息必须保留。
+# （具体包名优先于 "*" 通配。）
+[profile.dev.package.lilyco]
+debug = "line-tables-only"
+[profile.dev.package.lilyco-core]
+debug = "line-tables-only"
+[profile.dev.package.lilyco-cli]
+debug = "line-tables-only"
+[profile.dev.package.lilyco-mcp]
+debug = "line-tables-only"
+[profile.dev.package.lilyco-macros]
+debug = "line-tables-only"
+[profile.dev.package.ip-base]
+debug = "line-tables-only"
+
+# A组 = 基线对照：显式写出 cargo 默认 release 行为，只为后面对比兜底
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 16
+panic = "unwind"
+strip = "none"
+debug = false

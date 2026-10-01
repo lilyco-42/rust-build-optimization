@@ -1,0 +1,13 @@
+# windows-gnu 侧链接参数。
+#   -Wl,-e,mainCRTStartup  ← 对应 MSVC 的 /ENTRY:mainCRTStartup
+#   -Wl,--subsystem,console ← 对应 /SUBSYSTEM:CONSOLE
+#   -nostartfiles         ← 不要 mingw 的 crt 启动桩（我们已经 no_main）
+#   --gc-sections         ← 段级裁剪，对应 MSVC 的 /OPT:REF
+[build]
+rustflags = ["-C", "link-args=-Wl,-e,mainCRTStartupGnu -Wl,--subsystem,console -nostartfiles -Wl,--gc-sections -Wl,--strip-all"]
+
+[target.x86_64-pc-windows-gnu]
+linker = "zigcc-x86_64-pc-windows-gnu"
+
+# 注：zig 的 mingw 侧 crt2.obj 已定义 mainCRTStartup，
+# 故 gnu 版源码里把入口符号改名为 mainCRTStartupGnu 避免冲突。

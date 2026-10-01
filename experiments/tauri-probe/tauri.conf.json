@@ -1,0 +1,27 @@
+{
+  "productName": "tauri-probe",
+  "version": "0.1.0",
+  "identifier": "com.probe.tauri",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "probe",
+        "width": 300,
+        "height": 200
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
+}

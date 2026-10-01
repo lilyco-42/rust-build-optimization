@@ -1,0 +1,43 @@
+# 构建产物 —— 全部可重新生成
+target/
+target-*/
+*.pdb
+*.exe
+*.dll
+*.lib
+*.rlib
+*.rmeta
+*.obj
+*.exp
+*.ilk
+*.bc
+
+# Rust
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 本地实验残留
+_*.log.tmp
+.bak-before-opt
+*~
+
+# Agent 工具会话状态（私有数据，绝不入库）
+.agents/
+.omo/
+.opencode/
+.claude/
+session_dump/
+*.jsonl
+session_*.json
