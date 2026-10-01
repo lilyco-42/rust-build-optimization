@@ -1,0 +1,5 @@
+143:error: failed to run custom build command for `lilyco-tauri v0.3.0 (D:\Code\lilyco\lilyco-tauri)`
+145:Caused by:
+146:  process didn't exit successfully: `D:\Code\lilyco\target\debug\build\lilyco-tauri-a3e70c6ab12e6ab8\build-script-build` (exit code: 1)
+161:  resource path `binaries\lbin-x86_64-pc-windows-msvc.exe` doesn't exist
+162:warning: build failed, waiting for other jobs to finish...

@@ -60,6 +60,7 @@
 ├── docs/
 │   ├── 01-methodology.md                 ★★ 优化思路：分层决策（先看这个）
 │   ├── 00-experiment-log.md              ★ 全部实验台账（再看这个）
+│   ├── 02-lilyco-measurements.md          在真实 865 包工作区上的实测（含两个踩坑）
 │   ├── XMAKE_VS_RUST_PIPELINE.md          R1 对标 xmake：汇编层 + 全流程
 │   ├── TAURI_DEV_EFFICIENCY_PLAN.md       R2 Tauri 开发效率方案
 │   ├── TAURI_1GB_ACHIEVED.md              R3 达成 1 GB 实录（含 opt-level 标定）
@@ -119,8 +120,10 @@ find target -name "*.pdb"   -printf "%s\n" | awk '{s+=$1} END {printf "pdb:   %.
 | 坑 | 事实 |
 |---|---|
 | `sccache --set-max-cache-size 2G` | ❌ sccache 0.18 已移除该子命令。**唯一有效：`SCCACHE_CACHE_SIZE=2G` 环境变量**（配置文件它不读） |
+| **把 `rustc-wrapper = "sccache"` 写进默认配置** | ❌ **`cargo build --workspace` 会直接失败** —— web-sys 的 rustc 命令行约 4 万字符，超 Windows `CreateProcess` 的 32767 上限，sccache 作为 wrapper 发起调用就挂。改用 `RUSTC_WRAPPER=sccache cargo check` 按需开 |
 | 把 `[profile.*]` 写进全局 config | ❌ 完全无效，cargo 只在 workspace 根 `Cargo.toml` 读 |
 | 删 `staticlib` / `cdylib` 后再跑移动端 | ⚠️ 要改回 `["staticlib", "cdylib", "rlib"]`，否则 `tauri android init` / `ios init` 会挂 |
+| 把 `cargo build --workspace` 当基线 | ⚠️ 很多真实工作区本来就不通（缺 sidecar 二进制、sccache 撞长命令行）。用 CI 实际使用的那组命令测 |
 
 ---
 

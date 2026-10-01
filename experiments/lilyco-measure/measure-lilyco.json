@@ -1,0 +1,17 @@
+{
+  "check_cold_s": 53.6,
+  "check_cold_rc": 0,
+  "build_cold_s": 91.1,
+  "build_cold_rc": 0,
+  "build_cold_crates": 252,
+  "target_total_mb": 934.7,
+  "target_rlib_mb": 282.7,
+  "target_rmeta_mb": 187.3,
+  "target_pdb_mb": 0.0,
+  "target_lib_mb": 6.3,
+  "target_debug_build_mb": 39.1,
+  "target_debug_incremental_mb": 325.1,
+  "target_debug_deps_mb": 522.8,
+  "build_incr_s": 4.6,
+  "check_incr_s": 16.1
+}

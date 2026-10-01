@@ -1,0 +1,5 @@
+491:sccache: encountered fatal error
+494:sccache: caused by: 文件名或扩展名太长。 (os error 206)
+495:error: could not compile `web-sys` (lib)
+497:Caused by:
+499:warning: build failed, waiting for other jobs to finish...
