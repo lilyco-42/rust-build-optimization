@@ -47,7 +47,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
     };
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = util::workspace_root(&cwd).unwrap_or(cwd);
+    let root = util::workspace_root(&cwd).unwrap_or_else(|| cwd.clone());
 
     match parsed.cmd.as_str() {
         "help" | "--help" | "-h" => {
