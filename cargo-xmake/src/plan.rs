@@ -176,7 +176,7 @@ pub fn release_plan() -> Vec<Setting> {
 
 /// MSVC 上 rustc 即使 `debug=false` 也照传 `/DEBUG`，于是照样生成 .pdb。
 /// 实测 Tauri 项目这一刀省 179 MB（181MB → 0）。
-pub const DEBUG_NONE_FLAGS: [&str; 2] = ["-C", "link-args=/DEBUG:NONE"];
+pub const DEBUG_NONE_FLAGS: [&str; 1] = ["-Clink-args=/DEBUG:NONE"];
 
 /// 非 MSVC 平台不需要这个。
 pub fn link_flags_for(msvc: bool) -> &'static [&'static str] {

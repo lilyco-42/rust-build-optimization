@@ -1,6 +1,6 @@
 [package]
 name = "cargo-xmake"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.74"
 description = "A cargo subcommand that gives debug builds C/xmake-like speed and size, and keeps release at full static-dispatch performance."
